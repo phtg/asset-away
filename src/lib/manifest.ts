@@ -1,0 +1,40 @@
+import type { AppState, Job } from "./types";
+
+export function buildManifest(state: AppState, jobs: Job[]) {
+  return {
+    app: "asset-away",
+    generatedAt: new Date().toISOString(),
+    note: "Prompts, models and settings are what was actually submitted. Backgrounds are not guaranteed transparent and clips are not guaranteed to loop.",
+    items: jobs.map((j) => ({
+      file: j.output?.file ?? null,
+      name: j.name,
+      jobId: j.id,
+      providerJobId: j.providerJobId,
+      provider: j.run?.provider ?? null,
+      videoModel: j.run?.videoModel ?? null,
+      stillModel: j.run?.stillModel ?? null,
+      format: j.output?.format ?? null,
+      contentType: j.output?.contentType ?? null,
+      bytes: j.output?.bytes ?? null,
+      actionPrompt: j.actionPrompt,
+      sharedInstructions: j.run?.sharedInstructions ?? null,
+      fullVideoPrompt: j.run?.fullVideoPrompt ?? null,
+      stillPrompt: j.stillPrompt || null,
+      fullStillPrompt: j.run?.fullStillPrompt ?? null,
+      startImage: j.run?.startImageName ?? null,
+      usedPreparedStill: !!j.still?.approved,
+      duration: j.run?.duration ?? null,
+      resolution: j.run?.resolution ?? null,
+      aspectRatio: j.run?.aspectRatio ?? null,
+      seed: j.run?.seed ?? null,
+      generateAudio: j.run?.generateAudio ?? null,
+      estimatedCostUsd: j.run?.estimatedCostUsd ?? null,
+      reportedCostUsd: j.costUsd,
+      stillCostUsd: j.still?.costUsd ?? null,
+      queuedAt: j.queuedAt,
+      submittedAt: j.submittedAt,
+      completedAt: j.completedAt,
+    })),
+    settings: { concurrency: state.settings.concurrency },
+  };
+}

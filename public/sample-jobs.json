@@ -1,0 +1,16 @@
+{
+  "format": "asset-away-jobs",
+  "version": 1,
+  "jobs": [
+    {
+      "name": "Thinking",
+      "actionPrompt": "The robot tilts its head thoughtfully, pauses, then returns to its starting pose."
+    },
+    {
+      "name": "Coffee cheers",
+      "mode": "prepare",
+      "stillPrompt": "Same robot holding a white coffee mug at chest height; everything else unchanged.",
+      "actionPrompt": "The robot raises its coffee mug toward the viewer in a friendly toast, then returns it to its starting position."
+    }
+  ]
+}

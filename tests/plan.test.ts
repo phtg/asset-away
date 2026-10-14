@@ -289,4 +289,87 @@ describe("planning clips", () => {
     const [p] = await planItems(state, prov([]), [c.id]);
     expect(p.errors[0]).toMatch(/Keep/);
   });
+
+  it("blocks a green-background prompt when the green screen is off (the first-frame pop)", async () => {
+    const { state, project } = world({
+      project: {
+        greenScreen: false,
+        animationRules:
+          "Make the background chromatic green like a green screen.",
+      },
+    });
+    const c = newItem({
+      projectId: project.id,
+      kind: "clip",
+      name: "Wave",
+      prompt: "w",
+      sourceId: "anchor",
+    });
+    state.items.push(c);
+    const [p] = await planItems(state, prov([]), [c.id]);
+    expect(p.snapshot).toBeNull();
+    expect(p.errors.join(" ")).toMatch(/green screen.*off|jump to green/i);
+  });
+
+  it("does not complain about green wording when the green screen is on", async () => {
+    const { state, project, anchor } = world({
+      project: {
+        greenScreen: true,
+        animationRules: "Plain chroma green background.",
+      },
+    });
+    const plate = newItem({
+      projectId: project.id,
+      kind: "image",
+      origin: "plate",
+      name: "p",
+      verdict: "kept",
+      state: "completed",
+      parentId: "anchor",
+      file: anchor.file,
+    });
+    anchor.plateId = plate.id;
+    const c = newItem({
+      projectId: project.id,
+      kind: "clip",
+      name: "Wave",
+      prompt: "w",
+      sourceId: "anchor",
+    });
+    state.items.push(plate, c);
+    const [p] = await planItems(state, prov([]), [c.id]);
+    expect(p.errors).toEqual([]);
+  });
+
+  it("flattens a transparent start image onto white, or onto the brand colour when one is set", async () => {
+    const a = world({ project: { greenScreen: false } });
+    const c1 = newItem({
+      projectId: a.project.id,
+      kind: "clip",
+      name: "W",
+      prompt: "w",
+      sourceId: "anchor",
+    });
+    a.state.items.push(c1);
+    const [p1] = await planItems(a.state, prov([]), [c1.id]);
+    expect(p1.snapshot!.flatColor).toBe("#ffffff");
+    expect(p1.notes.join(" ")).toMatch(/transparent/);
+
+    const b = world({
+      project: {
+        greenScreen: false,
+        background: { mode: "color", color: "#e60167" },
+      },
+    });
+    const c2 = newItem({
+      projectId: b.project.id,
+      kind: "clip",
+      name: "W",
+      prompt: "w",
+      sourceId: "anchor",
+    });
+    b.state.items.push(c2);
+    const [p2] = await planItems(b.state, prov([]), [c2.id]);
+    expect(p2.snapshot!.flatColor).toBe("#e60167");
+  });
 });

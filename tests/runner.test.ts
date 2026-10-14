@@ -47,6 +47,7 @@ const clipSnap: RunSnapshot = {
   generateAudio: null,
   loopMode: "none",
   keyColor: "#00ff00",
+  flatColor: null,
   estimatedCostUsd: null,
 };
 const imageSnap: RunSnapshot = {

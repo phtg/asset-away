@@ -20,6 +20,7 @@ export async function POST(req: Request) {
     background?: { mode?: string; color?: string };
     similarity?: number;
     pingPong?: boolean;
+    trimFrames?: number;
   } | null;
   if (!b?.itemIds?.length) return fail("Select something to export.");
   const formats = (b.formats ?? []).filter((f) => FORMATS.includes(f));
@@ -30,6 +31,10 @@ export async function POST(req: Request) {
     background: { mode, color },
     similarity: Math.min(0.4, Math.max(0.05, Number(b.similarity) || 0.15)),
     pingPong: b.pingPong === true,
+    trimFrames: Math.min(
+      24,
+      Math.max(0, Math.round(Number(b.trimFrames) || 0)),
+    ),
   };
   const store = getStore();
   const items = b.itemIds

@@ -78,6 +78,26 @@ the Library.
   fringes or holes, change **Edge tolerance** in the export panel and preview it
   in the viewer first.
 
+## Troubleshooting a clip that “jumps” in its first frames
+
+Video models treat the first frame literally, then re-render everything, so a
+mismatch between the first frame and your prompt shows up as a pop in frames
+1–3. Common causes, and what the app does about them:
+
+- **A green background in your wording but not in the first frame** (e.g. motion
+  rules saying “make the background chromatic green” while _Animate on a green
+  screen_ is off). The app now **blocks** this with an explanation. Turn the
+  green screen on (the first frame then _is_ green) or remove that wording.
+- **A transparent first image.** Video models can’t use transparency, so it is
+  placed on white (or your brand colour if the project background is a colour)
+  before sending. Earlier versions could turn transparent pixels **black** when a
+  target aspect ratio was set; fixed, with a regression test.
+- **Residual re-rendering.** Use **Clip options → Skip first frames** when
+  exporting.
+- **Audio.** Some models (e.g. Grok Imagine) add an audio track even though
+  none was requested. MP4/GIF/WebM exports are always silent; “Original files”
+  keeps whatever the model produced.
+
 ## What was verified against OpenRouter’s docs
 
 | Capability                    | Result                                                                                                                      |
@@ -129,7 +149,7 @@ keying and export, can be tried. Put `[mock:reject]`, `[mock:uncertain]` or
 ## Tests
 
 ```bash
-npm test            # 72 tests: queue concurrency, persistence/resume, uncertain
+npm test            # 77 tests: queue concurrency, persistence/resume, uncertain
                     # submissions, retries, planner, v1 migration, helper
                     # parsing, and a real-ffmpeg pipeline (keying, exact brand
                     # colour compositing, transparent GIF/WebM alpha)

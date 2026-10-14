@@ -191,7 +191,11 @@ export async function compositeImage(
   ]);
 }
 
-/** Add margin (filled with `color`) so the image reaches `aspect`. */
+/**
+ * Add margin (filled with `color`) so the image reaches `aspect`. Transparent
+ * pixels are flattened onto `color` too: dropping alpha would turn them black,
+ * which a video model then has to "repair" in its first frames.
+ */
 export async function padToAspect(
   inPath: string,
   outPng: string,
@@ -205,8 +209,12 @@ export async function padToAspect(
   await run("ffmpeg", [
     "-i",
     inPath,
-    "-vf",
-    `format=rgba,pad=${ow}:${oh}:(ow-iw)/2:(oh-ih)/2:color=${hex0x(color)},format=rgb24`,
+    "-f",
+    "lavfi",
+    "-i",
+    `color=c=${hex0x(color)}:s=${ow}x${oh},format=rgb24`,
+    "-filter_complex",
+    "[0:v]format=rgba[fg];[1:v][fg]overlay=(W-w)/2:(H-h)/2:format=rgb,format=rgb24",
     "-frames:v",
     "1",
     outPng,
@@ -215,7 +223,13 @@ export async function padToAspect(
 
 // ---- video ----
 
+/** Drop the first N frames (models often re-render the very first frames). */
+const trimPrefix = (n?: number) =>
+  n && n > 0 ? `trim=start_frame=${Math.round(n)},setpts=PTS-STARTPTS,` : "";
+
 export interface VideoOpts extends KeyOpts {
+  /** Skip this many frames at the start. */
+  trimFrames?: number;
   /** Composite onto this colour instead of keeping transparency. */
   background?: string | null;
   loop?: boolean;
@@ -240,7 +254,7 @@ export async function videoToMp4OnColor(
     "-i",
     `color=c=${hex0x(o.background)}:s=${w}x${h}:r=${m.fps}`,
     "-filter_complex",
-    `[0:v]scale=${w}:${h},format=yuva420p,${keyFilter(o)}[fg];[1:v][fg]overlay=shortest=1:format=auto,scale=out_color_matrix=bt709:out_range=tv,format=yuv420p`,
+    `[0:v]${trimPrefix(o.trimFrames)}scale=${w}:${h},format=yuva420p,${keyFilter(o)}[fg];[1:v][fg]overlay=shortest=1:format=auto,scale=out_color_matrix=bt709:out_range=tv,format=yuv420p`,
     "-c:v",
     "libx264",
     "-crf",
@@ -283,7 +297,7 @@ export async function videoToGif(
       "-i",
       `color=c=${hex0x(o.background)}:s=${w}x${h}:r=${fps}`,
       "-filter_complex",
-      `[0:v]fps=${fps},scale=${w}:${h}:flags=lanczos,format=yuva420p,${keyFilter(o)}[fg];[1:v][fg]overlay=shortest=1:format=auto,split[a][b];[a]palettegen[p];[b][p]paletteuse`,
+      `[0:v]${trimPrefix(o.trimFrames)}fps=${fps},scale=${w}:${h}:flags=lanczos,format=yuva420p,${keyFilter(o)}[fg];[1:v][fg]overlay=shortest=1:format=auto,split[a][b];[a]palettegen[p];[b][p]paletteuse`,
       "-loop",
       loop,
       outPath,
@@ -294,7 +308,7 @@ export async function videoToGif(
     "-i",
     inPath,
     "-vf",
-    `${scale},format=yuva420p,${keyFilter(o)},format=rgba,split[a][b];[a]palettegen=reserve_transparent=1[p];[b][p]paletteuse=alpha_threshold=128`,
+    `${trimPrefix(o.trimFrames)}${scale},format=yuva420p,${keyFilter(o)},format=rgba,split[a][b];[a]palettegen=reserve_transparent=1[p];[b][p]paletteuse=alpha_threshold=128`,
     "-loop",
     loop,
     outPath,

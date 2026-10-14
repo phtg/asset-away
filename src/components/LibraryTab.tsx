@@ -36,6 +36,7 @@ export function LibraryTab({ state, refresh, review }: TabProps) {
   });
   const [similarity, setSimilarity] = useState(0.15);
   const [pingPong, setPingPong] = useState(false);
+  const [trim, setTrim] = useState(0);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -372,36 +373,56 @@ export function LibraryTab({ state, refresh, review }: TabProps) {
           </p>
         </div>
 
-        {nKeyable > 0 && (
+        {nClip > 0 && (
           <details className="text-sm">
             <summary className="cursor-pointer font-medium">
-              Keying options
+              Clip options
             </summary>
             <label className="mt-2 block text-xs">
-              Edge tolerance: {similarity.toFixed(2)}
+              Skip first frames: {trim}
               <input
                 type="range"
-                min={0.05}
-                max={0.4}
-                step={0.01}
-                value={similarity}
-                onChange={(e) => setSimilarity(Number(e.target.value))}
+                min={0}
+                max={12}
+                step={1}
+                value={trim}
+                onChange={(e) => setTrim(Number(e.target.value))}
                 className="w-full"
               />
               <span className="text-slate-500">
-                Raise if green fringes remain; lower if the subject gets holes.
-                Preview it in the viewer.
+                Video models sometimes re-render the very first frames, which
+                shows as a small pop. At 24 fps, 3 frames is about 0.1 s.
               </span>
             </label>
-            <label className="mt-2 flex items-start gap-2 text-xs">
-              <input
-                type="checkbox"
-                checked={pingPong}
-                onChange={(e) => setPingPong(e.target.checked)}
-                className="mt-0.5"
-              />
-              Ping-pong (play forward then backward) so clips loop smoothly
-            </label>
+            {nKeyable > 0 && (
+              <>
+                <label className="mt-2 block text-xs">
+                  Edge tolerance: {similarity.toFixed(2)}
+                  <input
+                    type="range"
+                    min={0.05}
+                    max={0.4}
+                    step={0.01}
+                    value={similarity}
+                    onChange={(e) => setSimilarity(Number(e.target.value))}
+                    className="w-full"
+                  />
+                  <span className="text-slate-500">
+                    Raise if green fringes remain; lower if the subject gets
+                    holes. Preview it in the viewer first.
+                  </span>
+                </label>
+                <label className="mt-2 flex items-start gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={pingPong}
+                    onChange={(e) => setPingPong(e.target.checked)}
+                    className="mt-0.5"
+                  />
+                  Ping-pong (play forward then backward) so clips loop smoothly
+                </label>
+              </>
+            )}
           </details>
         )}
 

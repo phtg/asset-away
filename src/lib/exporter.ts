@@ -23,6 +23,8 @@ export interface ExportOptions {
   similarity: number;
   /** Add a reversed copy so a non-looping clip loops. */
   pingPong: boolean;
+  /** Drop the first N frames of clips (models often re-render them). */
+  trimFrames?: number;
 }
 
 export type Rendered =

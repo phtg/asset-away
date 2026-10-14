@@ -55,6 +55,8 @@ export interface RunSnapshot {
   generateAudio: boolean | null;
   loopMode: "last-frame" | "prompt" | "none";
   keyColor: string;
+  /** Colour a transparent starting image is flattened onto (no green screen). */
+  flatColor: string | null;
   estimatedCostUsd: number | null;
 }
 

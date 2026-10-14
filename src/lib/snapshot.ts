@@ -19,6 +19,9 @@ export interface PlanItem {
   estimatedCostUsd: number | null;
 }
 
+const GREEN_WORDS =
+  /chroma|green[\s-]?screen|green background|chromatic green|green backdrop/i;
+
 export const CHROMA_CLAUSE = (hex: string) =>
   `The background must be a perfectly flat, uniform, solid chroma green (${hex.toUpperCase()}) with no shadows, gradients, reflections, texture or vignette, and no green tint or reflections on the subject.`;
 
@@ -159,6 +162,7 @@ export async function planItems(
             generateAudio: null,
             loopMode: "none",
             keyColor: project.keyColor,
+            flatColor: null,
             estimatedCostUsd: null,
           };
       return [{ ...base, errors, snapshot, estimatedCostUsd: null }];
@@ -187,6 +191,21 @@ export async function planItems(
     }
     if (!vModel || errors.length) {
       return [{ ...base, errors, snapshot: null, estimatedCostUsd: null }];
+    }
+    // A green background in the words but not in the first frame makes the
+    // model "fix" the background in its first frames (a visible pop).
+    if (
+      !project.greenScreen &&
+      GREEN_WORDS.test(`${project.animationRules} ${item.prompt}`)
+    ) {
+      errors.push(
+        "Your motion rules or prompt ask for a green background, but “Animate on a green screen” is off, so the first frame isn't green and the video will jump to green in its first frames. Turn the green screen on (Style tab) or remove that wording.",
+      );
+    }
+    if (!project.greenScreen && source?.file?.hasAlpha) {
+      base.notes.push(
+        `This image is transparent; for the video it is placed on ${project.background.mode === "color" ? project.background.color : "white"} (video models can't use transparency).`,
+      );
     }
     errors.push(...validateSettings(item, vModel));
     const r = resolveSettings(item, vModel);
@@ -230,6 +249,10 @@ export async function planItems(
           generateAudio: r.generateAudio,
           loopMode,
           keyColor: project.keyColor,
+          flatColor:
+            project.background.mode === "color"
+              ? project.background.color
+              : "#ffffff",
           estimatedCostUsd: cost,
         };
     return [{ ...base, errors, snapshot, estimatedCostUsd: cost }];

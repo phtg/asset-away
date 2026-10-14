@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { compositeImage, keyImage, padToAspect } from "./ffmpeg";
+import { compositeImage, keyImage, padToAspect, sampleCorner } from "./ffmpeg";
 import { inspectImage } from "./items";
 import { getApiKey } from "./keys";
 import { slugify } from "./parse";
@@ -386,15 +386,26 @@ export class Runner {
     if (!f || !target) throw new Error("The starting image file is missing.");
     const tmp = path.join(this.store.exportsDir, `${item.id}-start.png`);
     try {
+      // Fill colour for margins / transparent areas, computed only if needed.
+      // A green-screen plate is already opaque green; otherwise a transparent
+      // image goes onto a flat colour and an opaque one is extended with its
+      // own background colour.
+      const flat = snap.flatColor ?? "#ffffff";
+      const fillColor = async () =>
+        snap.startFrame === "plate"
+          ? snap.keyColor
+          : target.file!.hasAlpha
+            ? flat
+            : await sampleCorner(f.path).catch(() => flat);
       if (snap.aspectRatio) {
-        await padToAspect(f.path, tmp, snap.aspectRatio, snap.keyColor);
+        await padToAspect(f.path, tmp, snap.aspectRatio, await fillColor());
         return {
           mediaType: "image/png",
           bytes: new Uint8Array(fs.readFileSync(tmp)),
         };
       }
       if (snap.startFrame === "image" && target.file!.hasAlpha) {
-        await compositeImage(f.path, tmp, "#ffffff");
+        await compositeImage(f.path, tmp, flat);
         return {
           mediaType: "image/png",
           bytes: new Uint8Array(fs.readFileSync(tmp)),

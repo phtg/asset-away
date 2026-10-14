@@ -117,6 +117,71 @@ d("ffmpeg pipeline (real ffmpeg)", () => {
     expect(m.width / m.height).toBeCloseTo(16 / 9, 1);
   });
 
+  it("pads a TRANSPARENT image onto the fill colour (never black)", async () => {
+    // 200x200 fully transparent canvas with an opaque pink block
+    ff(
+      "-f",
+      "lavfi",
+      "-i",
+      "color=c=0x00000000:s=200x200,format=rgba",
+      "-f",
+      "lavfi",
+      "-i",
+      "color=c=0xcc3366:s=80x120,format=rgba",
+      "-filter_complex",
+      "[0][1]overlay=60:40:format=auto,format=rgba",
+      "-frames:v",
+      "1",
+      f("transp.png"),
+    );
+    await padToAspect(f("transp.png"), f("transp-wide.png"), "16:9", "#ffffff");
+    const m = await probe(f("transp-wide.png"));
+    expect(m.width / m.height).toBeCloseTo(16 / 9, 1);
+    // margin AND the formerly transparent area must be the fill colour
+    expect(px(f("transp-wide.png"), 3, 3).slice(0, 3)).toEqual([255, 255, 255]);
+    expect(
+      px(f("transp-wide.png"), Math.round(m.width / 2) - 90, 20).slice(0, 3),
+    ).toEqual([255, 255, 255]);
+    // the subject is untouched
+    expect(
+      px(f("transp-wide.png"), Math.round(m.width / 2), 100)[0],
+    ).toBeGreaterThan(150);
+  });
+
+  it("can skip the first frames of a clip (the model's re-rendered opening)", async () => {
+    // 3 black frames, then 12 frames of a solid red subject-ish colour on green
+    ff(
+      "-f",
+      "lavfi",
+      "-i",
+      "color=c=black:s=64x64:r=15:d=0.2",
+      "-f",
+      "lavfi",
+      "-i",
+      "color=c=0xcc2222:s=64x64:r=15:d=0.8",
+      "-filter_complex",
+      "[0:v][1:v]concat=n=2:v=1:a=0,format=yuv420p",
+      "-c:v",
+      "libx264",
+      f("opening.mp4"),
+    );
+    const first = (file: string) => px(file, 32, 32);
+    await videoToMp4OnColor(f("opening.mp4"), f("trim0.mp4"), {
+      keyColor: "#00ff00",
+      background: "#ffffff",
+    });
+    await videoToMp4OnColor(f("opening.mp4"), f("trim3.mp4"), {
+      keyColor: "#00ff00",
+      background: "#ffffff",
+      trimFrames: 3,
+    });
+    expect(first(f("trim0.mp4"))[0]).toBeLessThan(40); // starts black
+    expect(first(f("trim3.mp4"))[0]).toBeGreaterThan(150); // starts on the settled colour
+    const a = await probe(f("trim0.mp4"));
+    const b = await probe(f("trim3.mp4"));
+    expect(b.duration ?? 0).toBeLessThan(a.duration ?? 0);
+  });
+
   it("renders an MP4 on the brand colour with exact background pixels", async () => {
     await videoToMp4OnColor(f("green.mp4"), f("pink.mp4"), {
       keyColor: "#00ff00",

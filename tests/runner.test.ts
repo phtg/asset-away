@@ -372,6 +372,71 @@ describe("submission safety", () => {
   });
 });
 
+describe("silent clips", () => {
+  it.skipIf(!haveFfmpeg)(
+    "removes any audio the model added when the clip is downloaded",
+    async () => {
+      await seed(1);
+      const noisy = path.join(dir, "noisy.mp4");
+      execFileSync("ffmpeg", [
+        "-v",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=0x2255cc:s=64x64:r=15:d=1",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:duration=1",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-shortest",
+        noisy,
+      ]);
+      prov.downloadFn = async () => ({
+        bytes: new Uint8Array(fs.readFileSync(noisy)),
+        contentType: "video/mp4",
+      });
+      const r = runner();
+      await r.queue(all(["job1"]));
+      await r.idle();
+      const it = store.item("job1")!;
+      expect(it.state).toBe("completed");
+      expect(it.file!.silent).toBe(true);
+      const out = path.join(store.outputsDir, it.file!.file);
+      const audio = execFileSync("ffprobe", [
+        "-v",
+        "error",
+        "-select_streams",
+        "a",
+        "-show_entries",
+        "stream=index",
+        "-of",
+        "csv=p=0",
+        out,
+      ])
+        .toString()
+        .trim();
+      expect(audio).toBe("");
+      expect(it.file!.bytes).toBe(fs.statSync(out).size);
+    },
+  );
+
+  it("keeps a download whose container cannot be processed instead of failing it", async () => {
+    await seed(1);
+    const r = runner(); // the stub MP4 header is not a decodable file
+    await r.queue(all(["job1"]));
+    await r.idle();
+    expect(states()).toEqual(["completed"]);
+  });
+});
+
 describe("persistence and resume", () => {
   it("reloads state from disk and resumes polling without resubmitting", async () => {
     await seed(1, () => ({

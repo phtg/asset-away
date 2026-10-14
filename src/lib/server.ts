@@ -2,6 +2,7 @@ import { getProvider } from "./providers";
 import { mock } from "./providers/mock";
 import { openrouter } from "./providers/openrouter";
 import { Runner } from "./runner";
+import { silenceExisting } from "./silence";
 import { getStore } from "./store";
 
 export function getRunner(): Runner {
@@ -14,6 +15,7 @@ export function getRunner(): Runner {
     });
     globalThis.__assetAwayRunner = runner;
     void runner.recover(); // settle interrupted jobs, resume polling
+    void silenceExisting(store).catch(() => {}); // strip audio from older clips
   }
   return globalThis.__assetAwayRunner;
 }

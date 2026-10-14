@@ -64,9 +64,10 @@ export function resolveSettings(
       (aspectWanted && model.supportedAspectRatios?.includes(aspectWanted)
         ? aspectWanted
         : null),
-    // Only models that can produce audio get an explicit "no audio" request.
     seed: model.seed === true ? job.seed : null,
-    generateAudio: model.generateAudio === true ? false : null,
+    // Always ask for a silent video (slides don't want sound). Models that
+    // explicitly cannot make audio don't need the flag.
+    generateAudio: model.generateAudio === false ? null : false,
   };
 }
 

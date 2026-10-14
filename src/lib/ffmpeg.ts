@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 
 /**
  * Everything that needs ffmpeg lives here. Video models cannot output
@@ -357,4 +358,52 @@ export async function pingPong(inPath: string, outMp4: string) {
     "-an",
     outMp4,
   ]);
+}
+
+// ---- audio ----
+
+/** True when the file has at least one audio stream. */
+export async function hasAudio(path: string): Promise<boolean> {
+  const out = await run("ffprobe", [
+    "-v",
+    "error",
+    "-select_streams",
+    "a",
+    "-show_entries",
+    "stream=index",
+    "-of",
+    "csv=p=0",
+    path,
+  ]);
+  return out.toString().trim().length > 0;
+}
+
+/**
+ * Remove audio (and any attached cover-art stream) from an MP4/MOV in place,
+ * by stream copy: lossless and fast. Returns true if the file is silent
+ * afterwards. A no-op when ffmpeg is missing or there is no audio.
+ */
+export async function makeSilent(path: string): Promise<boolean> {
+  if (!(await ffmpegStatus()).available) return false;
+  if (!(await hasAudio(path))) return true;
+  const out = `${path}.silent.mp4`;
+  try {
+    await run("ffmpeg", [
+      "-i",
+      path,
+      "-map",
+      "0:v:0",
+      "-c",
+      "copy",
+      "-an",
+      "-movflags",
+      "+faststart",
+      out,
+    ]);
+    fs.renameSync(out, path);
+    return true;
+  } catch {
+    fs.rmSync(out, { force: true });
+    return false;
+  }
 }

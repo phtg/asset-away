@@ -27,6 +27,8 @@ export interface FileInfo {
   height: number | null;
   hasAlpha: boolean;
   contentType: string | null; // as reported by the provider
+  /** Clips: audio has been removed (or never existed). */
+  silent?: boolean;
 }
 
 /** What the helper model recommended for an animation (shown, editable). */

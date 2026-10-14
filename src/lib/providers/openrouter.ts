@@ -239,7 +239,26 @@ export async function submitVideo(req: VideoSubmitRequest): Promise<JobHandle> {
     });
   }
 
-  const j = (await postPaid(`${BASE}/videos`, body, 90_000)) as Rec;
+  let j: Rec;
+  try {
+    j = (await postPaid(`${BASE}/videos`, body, 90_000)) as Rec;
+  } catch (e) {
+    // If the provider refuses the optional audio flag itself, a definitive 400
+    // naming it means nothing was started, so one re-send without it is safe.
+    // Any other failure (including every ambiguous one) is never retried.
+    if (
+      e instanceof ProviderError &&
+      e.kind === "rejected" &&
+      e.status === 400 &&
+      "generate_audio" in body &&
+      /generate_audio/i.test(e.message)
+    ) {
+      delete body.generate_audio;
+      j = (await postPaid(`${BASE}/videos`, body, 90_000)) as Rec;
+    } else {
+      throw e;
+    }
+  }
   if (typeof j.id !== "string" || !j.id) {
     throw new ProviderError("Provider response had no job id.", "uncertain");
   }

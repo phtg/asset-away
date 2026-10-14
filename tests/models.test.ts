@@ -34,7 +34,24 @@ describe("defaults", () => {
     expect(defaultResolution(["1080p", "720p"])).toBe("720p");
     expect(defaultResolution(["2K"])).toBe("2K");
   });
-  it("only requests no-audio / seed when the model supports them", () => {
+  it("always asks for silence, unless the model cannot make audio at all", () => {
+    const j = {
+      duration: null,
+      resolution: null,
+      aspectRatio: null,
+      seed: null,
+    };
+    expect(
+      resolveSettings(j, { ...base, generateAudio: true }).generateAudio,
+    ).toBe(false);
+    expect(
+      resolveSettings(j, { ...base, generateAudio: null }).generateAudio,
+    ).toBe(false);
+    expect(
+      resolveSettings(j, { ...base, generateAudio: false }).generateAudio,
+    ).toBeNull();
+  });
+  it("only requests a seed when the model supports it", () => {
     const r = resolveSettings(
       { duration: null, resolution: null, aspectRatio: null, seed: 3 },
       base,

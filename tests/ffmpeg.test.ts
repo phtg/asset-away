@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  hasAudio,
+  makeSilent,
   compositeImage,
   ffmpegStatus,
   keyImage,
@@ -180,6 +182,62 @@ d("ffmpeg pipeline (real ffmpeg)", () => {
     const a = await probe(f("trim0.mp4"));
     const b = await probe(f("trim3.mp4"));
     expect(b.duration ?? 0).toBeLessThan(a.duration ?? 0);
+  });
+
+  it("strips audio (and cover art) losslessly, keeping every video frame", async () => {
+    ff(
+      "-f",
+      "lavfi",
+      "-i",
+      "color=c=0xcc2222:s=64x64:r=15:d=1",
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=frequency=440:duration=1",
+      "-i",
+      f("green.png"),
+      "-map",
+      "0:v",
+      "-map",
+      "1:a",
+      "-map",
+      "2:v",
+      "-c:v:0",
+      "libx264",
+      "-pix_fmt",
+      "yuv420p",
+      "-c:a",
+      "aac",
+      "-c:v:1",
+      "mjpeg",
+      "-strict",
+      "unofficial",
+      "-disposition:v:1",
+      "attached_pic",
+      "-t",
+      "1",
+      f("noisy.mp4"),
+    );
+    expect(await hasAudio(f("noisy.mp4"))).toBe(true);
+    expect(await makeSilent(f("noisy.mp4"))).toBe(true);
+    expect(await hasAudio(f("noisy.mp4"))).toBe(false);
+    const streams = execFileSync("ffprobe", [
+      "-v",
+      "error",
+      "-count_frames",
+      "-show_entries",
+      "stream=codec_type,nb_read_frames",
+      "-of",
+      "csv=p=0",
+      f("noisy.mp4"),
+    ])
+      .toString()
+      .trim()
+      .split("\n");
+    expect(streams).toHaveLength(1); // only the video stream is left
+    expect(streams[0]).toMatch(/^video,15/); // all 15 frames, no re-encode
+    // already silent: a cheap no-op that still reports success
+    expect(await makeSilent(f("noisy.mp4"))).toBe(true);
   });
 
   it("renders an MP4 on the brand colour with exact background pixels", async () => {

@@ -94,9 +94,10 @@ mismatch between the first frame and your prompt shows up as a pop in frames
   target aspect ratio was set; fixed, with a regression test.
 - **Residual re-rendering.** Use **Clip options → Skip first frames** when
   exporting.
-- **Audio.** Some models (e.g. Grok Imagine) add an audio track even though
-  none was requested. MP4/GIF/WebM exports are always silent; “Original files”
-  keeps whatever the model produced.
+- **Audio.** Clips are always silent. Every video request sends
+  `generate_audio: false`, and because some models (e.g. Grok Imagine) add sound
+  anyway, any audio track is stripped (lossless stream copy, needs ffmpeg) as soon
+  as the clip is downloaded. Clips downloaded earlier are cleaned once at startup.
 
 ## What was verified against OpenRouter’s docs
 
@@ -149,7 +150,7 @@ keying and export, can be tried. Put `[mock:reject]`, `[mock:uncertain]` or
 ## Tests
 
 ```bash
-npm test            # 77 tests: queue concurrency, persistence/resume, uncertain
+npm test            # 86 tests: queue concurrency, persistence/resume, uncertain
                     # submissions, retries, planner, v1 migration, helper
                     # parsing, and a real-ffmpeg pipeline (keying, exact brand
                     # colour compositing, transparent GIF/WebM alpha)

@@ -1,6 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { compositeImage, keyImage, padToAspect, sampleCorner } from "./ffmpeg";
+import {
+  compositeImage,
+  keyImage,
+  makeSilent,
+  padToAspect,
+  sampleCorner,
+} from "./ffmpeg";
 import { inspectImage } from "./items";
 import { getApiKey } from "./keys";
 import { slugify } from "./parse";
@@ -539,6 +545,12 @@ export class Runner {
       const ext = format === "unknown" ? "bin" : format;
       const tmp = path.join(this.store.outputsDir, `${id}.tmp`);
       fs.writeFileSync(tmp, bytes);
+      // Slides want silent clips: drop any audio the model added anyway.
+      const silent =
+        format === "mp4" || format === "mov"
+          ? await makeSilent(tmp).catch(() => false)
+          : false;
+      const size = fs.statSync(tmp).size;
       await this.store.update((s) => {
         const j = s.items.find((x) => x.id === id)!;
         const src = s.items.find((x) => x.id === j.sourceId);
@@ -556,12 +568,13 @@ export class Runner {
         j.file = {
           file,
           mediaType: contentType ?? "video/mp4",
-          bytes: bytes.length,
+          bytes: size,
           format,
           width: null,
           height: null,
           hasAlpha: false,
           contentType,
+          silent,
         };
         j.state = "completed";
         j.verdict = "pending";

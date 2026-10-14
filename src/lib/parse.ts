@@ -121,3 +121,23 @@ export function parseJobListJson(raw: string): ExportedJobList {
     jobs,
   };
 }
+
+/**
+ * Models sometimes wrap answers in <prompt>…</prompt>, <notes>, or code
+ * fences even when told not to. Strip a wrapper so the suggestion is plain.
+ */
+export function cleanHelperText(text: string): string {
+  let t = text.trim();
+  const fence = /^```[a-z]*\n([\s\S]*?)\n```$/i.exec(t);
+  if (fence) t = fence[1].trim();
+  const tag =
+    /^<(prompt|notes|answer|output|response)>\s*([\s\S]*?)\s*<\/\1>$/i.exec(t);
+  if (tag) t = tag[2].trim();
+  t = t
+    .replace(
+      /^<\/?(prompt|notes|answer|output|response)>\s*|\s*<\/?(prompt|notes|answer|output|response)>$/gi,
+      "",
+    )
+    .trim();
+  return t;
+}

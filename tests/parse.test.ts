@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  cleanHelperText,
   composePrompt,
   parseBulkPrompts,
   parseJobListJson,
@@ -99,5 +100,20 @@ describe("parseJobListJson", () => {
       .jobs[0];
     expect(j.duration).toBeNull();
     expect(j.seed).toBeNull();
+  });
+});
+
+describe("cleanHelperText", () => {
+  it("strips wrapper tags and code fences from helper output", () => {
+    expect(cleanHelperText("<prompt>\nTilt head.\n</prompt>")).toBe(
+      "Tilt head.",
+    );
+    expect(cleanHelperText("```text\nTilt head.\n```")).toBe("Tilt head.");
+    expect(cleanHelperText("<prompt>Tilt head.")).toBe("Tilt head.");
+  });
+  it("leaves plain text alone", () => {
+    expect(cleanHelperText("  Tilt <b>head</b> slowly. ")).toBe(
+      "Tilt <b>head</b> slowly.",
+    );
   });
 });

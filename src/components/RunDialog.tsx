@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Btn } from "./ui";
 import { money, post, type PlanResponse } from "./api";
 
 export function RunDialog({
@@ -19,19 +20,18 @@ export function RunDialog({
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    post<PlanResponse>("/api/jobs/plan", { ids })
+    post<PlanResponse>("/api/run/plan", { ids })
       .then(setPlan)
       .catch((e) => setErr(e.message));
   }, [ids]);
 
   const ready = plan?.items.filter((i) => i.ready) ?? [];
+  const images = ready.filter((i) => i.kind === "image").length;
+  const clips = ready.filter((i) => i.kind === "clip").length;
   const start = async () => {
     setBusy(true); // also blocks double-clicks
     try {
-      await post("/api/jobs/run", {
-        ids: ready.map((i) => i.id),
-        confirm: true,
-      });
+      await post("/api/run", { ids: ready.map((i) => i.id), confirm: true });
       onStarted();
       onClose();
     } catch (e) {
@@ -41,7 +41,7 @@ export function RunDialog({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4">
       <div className="max-h-[90vh] w-full max-w-2xl overflow-auto rounded-xl bg-white p-5 shadow-xl">
         <h3 className="text-lg font-semibold">Confirm generation</h3>
         {err && (
@@ -59,104 +59,101 @@ export function RunDialog({
               <dd className={mock ? "font-semibold text-amber-700" : ""}>
                 {plan.provider.label}
               </dd>
-              <dt className="text-slate-500">Video model</dt>
-              <dd>{plan.videoModel ?? "—"}</dd>
-              <dt className="text-slate-500">Jobs ready</dt>
+              {images > 0 && (
+                <>
+                  <dt className="text-slate-500">Image model</dt>
+                  <dd>{plan.imageModel ?? "—"}</dd>
+                </>
+              )}
+              {clips > 0 && (
+                <>
+                  <dt className="text-slate-500">Video model</dt>
+                  <dd>{plan.videoModel ?? "—"}</dd>
+                </>
+              )}
+              <dt className="text-slate-500">Ready</dt>
               <dd>
-                {ready.length} of {plan.items.length}
+                {images > 0 && `${images} image${images === 1 ? "" : "s"}`}
+                {images > 0 && clips > 0 && " + "}
+                {clips > 0 && `${clips} clip${clips === 1 ? "" : "s"}`} of{" "}
+                {plan.items.length}
               </dd>
               <dt className="text-slate-500">Concurrency</dt>
               <dd>{plan.concurrency} at a time</dd>
               <dt className="text-slate-500">Estimated cost</dt>
               <dd className="font-semibold">
                 {mock ? "$0 (mock)" : money(plan.totalEstimatedUsd)}
-                {!mock &&
-                  plan.totalEstimatedUsd == null &&
-                  plan.partialUsd > 0 && (
-                    <span className="ml-1 font-normal text-slate-500">
-                      (known part ≈ {money(plan.partialUsd)};{" "}
-                      {plan.unknownCount} job(s) unpriced)
-                    </span>
-                  )}
+                {!mock && plan.totalEstimatedUsd == null && (
+                  <span className="ml-1 font-normal text-slate-500">
+                    {plan.partialUsd > 0
+                      ? `(clips ≈ ${money(plan.partialUsd)}; `
+                      : "("}
+                    {plan.unknownCount} item(s) unpriced — image prices are
+                    reported after generation)
+                  </span>
+                )}
               </dd>
             </dl>
 
-            <table className="mt-3 w-full text-left text-sm">
-              <thead className="text-xs text-slate-500">
-                <tr>
-                  <th>Job</th>
-                  <th>Steps</th>
-                  <th className="text-right">Est. video cost</th>
-                </tr>
-              </thead>
-              <tbody>
-                {plan.items.map((i) => (
-                  <tr key={i.id} className="border-t align-top">
-                    <td className="py-1 pr-2">
+            <ul className="mt-3 divide-y text-sm">
+              {plan.items.map((i) => (
+                <li key={i.id} className="py-1.5">
+                  <div className="flex justify-between gap-3">
+                    <span>
+                      <span className="mr-1 text-xs text-slate-400">
+                        {i.kind === "image" ? "IMG" : "CLIP"}
+                      </span>
                       {i.name}
-                      {i.errors.map((e, k) => (
-                        <div key={k} className="text-xs text-rose-600">
-                          {e}
-                        </div>
-                      ))}
-                    </td>
-                    <td className="py-1 pr-2 text-xs">
+                    </span>
+                    <span className="text-slate-600">
                       {i.ready
-                        ? i.startsWithStill
-                          ? "image → your approval → video"
-                          : "video"
+                        ? mock
+                          ? "$0"
+                          : i.kind === "clip"
+                            ? money(i.estimatedCostUsd)
+                            : "—"
                         : "skipped"}
-                    </td>
-                    <td className="py-1 text-right">
-                      {mock ? "$0" : money(i.estimatedCostUsd)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                    </span>
+                  </div>
+                  {i.errors.map((e, k) => (
+                    <div key={k} className="text-xs text-rose-600">
+                      {e}
+                    </div>
+                  ))}
+                  {i.notes.map((e, k) => (
+                    <div key={k} className="text-xs text-slate-500">
+                      {e}
+                    </div>
+                  ))}
+                </li>
+              ))}
+            </ul>
 
             <ul className="mt-3 list-disc space-y-1 pl-5 text-xs text-slate-600">
               <li>
-                OpenRouter documents no way to cancel a submitted video job, so
-                stopping here later won&apos;t stop billing for jobs already
-                submitted.
+                OpenRouter documents no way to cancel a submitted request, so
+                stopping later won&apos;t stop billing for requests already
+                sent.
               </li>
               <li>
-                There is no idempotency key, so a submission is never retried
-                automatically; an unclear outcome is flagged &quot;submission
-                uncertain&quot;.
+                There is no idempotency key, so a paid request is never retried
+                automatically; an unclear outcome is flagged “submission
+                uncertain”.
               </li>
               <li>
-                Estimates come from published per-second prices; the real cost
-                is shown when each job finishes. Starting-image costs
-                aren&apos;t estimated.
+                Review each result before building on it. Nothing animates until
+                you keep its image.
               </li>
-              {plan.items.some((i) => i.startsWithStill) &&
-                !plan.autoApproveStills && (
-                  <li>
-                    Prepared starting images wait for your approval before any
-                    video is paid for.
-                  </li>
-                )}
             </ul>
           </>
         )}
         <div className="mt-4 flex justify-end gap-2">
-          <button
-            onClick={onClose}
-            className="rounded border px-4 py-2 text-sm"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={start}
-            disabled={busy || !ready.length}
-            className="rounded bg-emerald-700 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
-          >
+          <Btn onClick={onClose}>Cancel</Btn>
+          <Btn kind="success" onClick={start} disabled={busy || !ready.length}>
             {busy
               ? "Starting…"
-              : `Start ${ready.length} job${ready.length === 1 ? "" : "s"}`}
-          </button>
+              : `Start ${ready.length} item${ready.length === 1 ? "" : "s"}`}
+          </Btn>
         </div>
       </div>
     </div>

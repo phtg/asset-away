@@ -1,11 +1,12 @@
+import { normalizeHex } from "@/lib/items";
 import { fail, getRunner, json } from "@/lib/server";
 import { getStore } from "@/lib/store";
 
 const STR_NULL = [
-  "defaultImageId",
   "videoModel",
-  "stillModel",
+  "imageModel",
   "helperModel",
+  "activeProjectId",
 ] as const;
 
 export async function PATCH(req: Request) {
@@ -17,9 +18,6 @@ export async function PATCH(req: Request) {
   const store = getStore();
   await store.update((s) => {
     const st = s.settings;
-    if (typeof body.sharedInstructions === "string") {
-      st.sharedInstructions = body.sharedInstructions.slice(0, 5000);
-    }
     for (const k of STR_NULL) {
       if (k in body && (body[k] === null || typeof body[k] === "string")) {
         st[k] = (body[k] as string | null) || null;
@@ -28,10 +26,19 @@ export async function PATCH(req: Request) {
     if (typeof body.concurrency === "number") {
       st.concurrency = Math.min(6, Math.max(1, Math.round(body.concurrency)));
     }
-    if (typeof body.autoApproveStills === "boolean")
-      st.autoApproveStills = body.autoApproveStills;
     if (typeof body.mock === "boolean") st.mock = body.mock;
+    if (Array.isArray(body.savedColors)) {
+      st.savedColors = [
+        ...new Set(
+          body.savedColors.flatMap((c) =>
+            (typeof c === "string" ? [normalizeHex(c)] : []).filter(
+              (x): x is string => !!x,
+            ),
+          ),
+        ),
+      ].slice(0, 16);
+    }
   });
-  getRunner().tick(); // a higher concurrency may free up queued jobs
+  getRunner().tick();
   return json({ settings: store.get().settings });
 }

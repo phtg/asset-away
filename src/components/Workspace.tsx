@@ -7,20 +7,55 @@ import {
   nearestDuration,
   supportsFirstFrame,
 } from "@/lib/models";
-import { ACTIVE_STATES } from "@/lib/types";
-import { api, patch, post, type ModelLists, type ServerState } from "./api";
-import { Gallery } from "./Gallery";
-import { JobCard } from "./JobCard";
-import { PromptsPanel } from "./PromptsPanel";
-import { ProviderPanel } from "./ProviderPanel";
+import type { ProjectKind } from "@/lib/types";
+import { AnimationsTab } from "./AnimationsTab";
+import { ImagesTab } from "./ImagesTab";
+import { LibraryTab } from "./LibraryTab";
+import { Lightbox } from "./Lightbox";
 import { RunDialog } from "./RunDialog";
+import { SettingsDialog } from "./SettingsDialog";
+import { StyleTab } from "./StyleTab";
+import { Btn } from "./ui";
+import {
+  api,
+  patch,
+  post,
+  type ModelLists,
+  type ServerState,
+  type Tab,
+} from "./api";
+
+const TABS: { id: Tab; label: string; hint: string }[] = [
+  {
+    id: "style",
+    label: "1 · Style",
+    hint: "Describe the look, add references",
+  },
+  { id: "images", label: "2 · Images", hint: "Plan, generate, review" },
+  {
+    id: "animations",
+    label: "3 · Animations",
+    hint: "Animate approved images",
+  },
+  {
+    id: "library",
+    label: "4 · Library & Export",
+    hint: "Everything, ready to download",
+  },
+];
 
 export function Workspace() {
   const [state, setState] = useState<ServerState | null>(null);
   const [models, setModels] = useState<ModelLists | null>(null);
   const [modelsError, setModelsError] = useState<string | null>(null);
-  const [dialogIds, setDialogIds] = useState<string[] | null>(null);
-  const [note, setNote] = useState<string | null>(null);
+  const [tab, setTab] = useState<Tab>("style");
+  const [lightbox, setLightbox] = useState<{
+    id: string;
+    list: string[];
+  } | null>(null);
+  const [runIds, setRunIds] = useState<string[] | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [newProject, setNewProject] = useState(false);
 
   const refresh = useCallback(() => {
     api<ServerState>("/api/state")
@@ -34,6 +69,20 @@ export function Workspace() {
     return () => clearInterval(t);
   }, [refresh]);
 
+  // remember the tab (best effort: storage can be unavailable)
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("asset-away-tab") as Tab | null;
+      if (saved && TABS.some((t) => t.id === saved)) setTab(saved);
+    } catch {}
+  }, []);
+  const go = useCallback((t: Tab) => {
+    setTab(t);
+    try {
+      localStorage.setItem("asset-away-tab", t);
+    } catch {}
+  }, []);
+
   const mock = state?.mock;
   useEffect(() => {
     if (mock === undefined) return;
@@ -44,158 +93,226 @@ export function Workspace() {
       .catch((e) => setModelsError(e.message));
   }, [mock]);
 
-  // Sensible default: the cheapest priced video model that takes a start frame.
+  // Sensible defaults from the live model lists (only when nothing valid is chosen).
   useEffect(() => {
     if (!state || !models) return;
+    const s = state.settings;
+    const upd: Record<string, string> = {};
     const usable = models.video.filter(supportsFirstFrame);
-    if (
-      !usable.length ||
-      usable.some((m) => m.id === state.settings.videoModel)
-    )
-      return;
-    const cost = (m: (typeof usable)[number]) =>
-      estimateVideoCost(m, {
-        duration: nearestDuration(m.supportedDurations),
-        resolution: defaultResolution(m.supportedResolutions),
-        audio: false,
-      }) ?? 99;
-    const best = [...usable].sort((a, b) => cost(a) - cost(b))[0];
-    void patch("/api/settings", { videoModel: best.id }).then(refresh);
+    if (usable.length && !usable.some((m) => m.id === s.videoModel)) {
+      const cost = (m: (typeof usable)[number]) =>
+        estimateVideoCost(m, {
+          duration: nearestDuration(m.supportedDurations),
+          resolution: defaultResolution(m.supportedResolutions),
+          audio: false,
+        }) ?? 99;
+      upd.videoModel = [...usable].sort((a, b) => cost(a) - cost(b))[0].id;
+    }
+    const imgs = models.image.filter(
+      (m) => m.acceptsImageInput && m.maxReferences > 0,
+    );
+    if (imgs.length && !imgs.some((m) => m.id === s.imageModel)) {
+      upd.imageModel = (imgs.find((m) => m.transparent) ?? imgs[0]).id;
+    }
+    if (Object.keys(upd).length) void patch("/api/settings", upd).then(refresh);
   }, [state, models, refresh]);
 
-  const model = useMemo(
-    () => models?.video.find((m) => m.id === state?.settings.videoModel),
-    [models, state?.settings.videoModel],
+  const review = useCallback(
+    (id: string, list: string[]) => setLightbox({ id, list }),
+    [],
+  );
+  const tabProps = useMemo(
+    () =>
+      state
+        ? { state, models, refresh, review, run: setRunIds, goto: go }
+        : null,
+    [state, models, refresh, review, go],
   );
 
-  if (!state) return <main className="p-6 text-slate-500">Loading…</main>;
-
-  const { jobs, images, settings } = state;
-  const sorted = [...jobs].sort((a, b) => a.order - b.order);
-  const draftIncluded = sorted.filter((j) => j.include && j.state === "draft");
-  const queued = jobs.filter((j) => j.state === "queued").length;
-  const active = jobs.filter((j) => ACTIVE_STATES.includes(j.state)).length;
-  const completed = jobs.filter((j) => j.state === "completed").length;
+  if (!state || !tabProps)
+    return <main className="p-6 text-slate-500">Loading…</main>;
+  const running = state.items.filter((i) =>
+    ["queued", "submitting", "generating", "downloading"].includes(i.state),
+  ).length;
+  const needsKey = state.keySource === "none" && !state.mock;
 
   return (
-    <main className="mx-auto max-w-6xl space-y-5 p-4 sm:p-6">
-      <header>
-        <h1 className="text-2xl font-bold">Asset Away</h1>
-        <p className="text-sm text-slate-600">
-          Batch-generate short character animations for presentations.
-          Everything runs locally; only provider calls leave this machine.
-        </p>
+    <div className="min-h-screen">
+      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-3 px-4 py-2">
+          <h1 className="text-lg font-bold tracking-tight">Asset Away</h1>
+          <select
+            value={state.project.id}
+            onChange={async (e) => {
+              if (e.target.value === "__new") return setNewProject(true);
+              await patch("/api/settings", { activeProjectId: e.target.value });
+              refresh();
+            }}
+            className="max-w-[14rem] rounded-md border border-slate-300 bg-white px-2 py-1 text-sm font-medium"
+            aria-label="Project"
+          >
+            {state.projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name} ({p.count})
+              </option>
+            ))}
+            <option value="__new">+ New project…</option>
+          </select>
+          <nav className="flex flex-1 flex-wrap gap-1">
+            {TABS.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => go(t.id)}
+                title={t.hint}
+                className={`rounded-md px-3 py-1.5 text-sm font-medium ${tab === t.id ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"}`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </nav>
+          {running > 0 && (
+            <span className="rounded-full bg-sky-100 px-2 py-1 text-xs font-medium text-sky-800">
+              {running} running
+            </span>
+          )}
+          <Btn kind="ghost" onClick={() => setSettingsOpen(true)}>
+            ⚙ Settings
+          </Btn>
+        </div>
         {state.mock && (
-          <div className="mt-2 rounded-lg border border-amber-300 bg-amber-100 p-2 text-sm font-semibold text-amber-900">
-            MOCK MODE — no real provider is contacted and nothing is billed.
-            Outputs are a placeholder test clip, not your character.
+          <div className="bg-amber-100 px-4 py-1.5 text-center text-sm font-semibold text-amber-900">
+            MOCK MODE — nothing is sent to any provider and nothing is billed.
+            Results are placeholder art.
+          </div>
+        )}
+        {needsKey && (
+          <div className="bg-rose-50 px-4 py-1.5 text-center text-sm text-rose-800">
+            No OpenRouter API key yet.{" "}
+            <button
+              className="font-semibold underline"
+              onClick={() => setSettingsOpen(true)}
+            >
+              Add it in Settings
+            </button>{" "}
+            (or turn on Mock mode to try the app for free).
+          </div>
+        )}
+        {!state.ffmpeg.available && (
+          <div className="bg-amber-50 px-4 py-1.5 text-center text-sm text-amber-900">
+            ffmpeg not found — needed for transparent GIF/WebM and background
+            colours. Install with <code>brew install ffmpeg</code>, then
+            restart.
+          </div>
+        )}
+        {modelsError && (
+          <div className="bg-rose-50 px-4 py-1.5 text-center text-sm text-rose-800">
+            {modelsError}
           </div>
         )}
       </header>
 
-      <ProviderPanel
-        state={state}
-        models={models}
-        modelsError={modelsError}
-        refresh={refresh}
-      />
-      <Gallery
-        images={images}
-        defaultImageId={settings.defaultImageId}
-        maxUploadMb={state.maxUploadMb}
-        refresh={refresh}
-      />
-      <PromptsPanel
-        shared={settings.sharedInstructions}
-        images={images}
-        jobs={sorted}
-        helperReady={!!settings.helperModel}
-        refresh={refresh}
-      />
+      <main className="mx-auto max-w-7xl p-4">
+        {tab === "style" && <StyleTab {...tabProps} />}
+        {tab === "images" && <ImagesTab {...tabProps} />}
+        {tab === "animations" && <AnimationsTab {...tabProps} />}
+        {tab === "library" && <LibraryTab {...tabProps} />}
+      </main>
 
-      <section>
-        <div className="sticky top-0 z-10 -mx-1 flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white/95 p-3 shadow-sm backdrop-blur">
-          <h2 className="mr-auto text-lg font-semibold">
-            4. Jobs{" "}
-            <span className="text-sm font-normal text-slate-500">
-              ({jobs.length} · {active} running · {queued} queued · {completed}{" "}
-              done)
-            </span>
-          </h2>
-          <button
-            onClick={() => setDialogIds(draftIncluded.map((j) => j.id))}
-            disabled={!draftIncluded.length}
-            className="rounded bg-emerald-700 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
-          >
-            Generate selected ({draftIncluded.length})
-          </button>
-          <button
-            onClick={async () => {
-              if (
-                confirm(
-                  "Return queued jobs to draft?\n\nJobs already submitted to the provider cannot be cancelled and will keep running (and billing).",
-                )
-              ) {
-                const r = await post<{ stopped: number; note: string }>(
-                  "/api/jobs/stop",
-                );
-                setNote(
-                  `${r.stopped} queued job(s) returned to draft. ${r.note}`,
-                );
-                refresh();
-              }
-            }}
-            disabled={!queued}
-            className="rounded border px-3 py-2 text-sm disabled:opacity-40"
-          >
-            Stop queued
-          </button>
-          <a
-            href="/api/download-all"
-            aria-disabled={!completed}
-            className={`rounded border px-3 py-2 text-sm ${completed ? "" : "pointer-events-none opacity-40"}`}
-          >
-            Download all (ZIP)
-          </a>
-        </div>
-        {note && <p className="mt-2 text-sm text-slate-600">{note}</p>}
-
-        <div className="mt-3 space-y-3">
-          {sorted.length === 0 && (
-            <p className="rounded-xl border border-dashed p-8 text-center text-sm text-slate-500">
-              No jobs yet. Paste prompts above and parse them into job cards.
-            </p>
-          )}
-          {sorted.map((j) => (
-            <JobCard
-              key={j.id}
-              job={j}
-              images={images}
-              defaultImageId={settings.defaultImageId}
-              shared={settings.sharedInstructions}
-              model={model}
-              helperReady={!!settings.helperModel}
-              mock={state.mock}
-              refresh={refresh}
-            />
-          ))}
-        </div>
-      </section>
-
-      <footer className="pb-8 text-xs text-slate-500">
-        Notes: backgrounds are not guaranteed to be transparent and clips are
-        not guaranteed to loop seamlessly. Videos are saved to{" "}
-        <code>data/outputs</code>.
-      </footer>
-
-      {dialogIds && (
+      {lightbox && (
+        <Lightbox
+          state={state}
+          start={lightbox}
+          refresh={refresh}
+          run={(ids) => {
+            setLightbox(null);
+            setRunIds(ids);
+          }}
+          onClose={() => setLightbox(null)}
+        />
+      )}
+      {runIds && (
         <RunDialog
-          ids={dialogIds}
+          ids={runIds}
           mock={state.mock}
-          onClose={() => setDialogIds(null)}
+          onClose={() => setRunIds(null)}
           onStarted={refresh}
         />
       )}
-    </main>
+      {settingsOpen && (
+        <SettingsDialog
+          state={state}
+          models={models}
+          refresh={refresh}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
+      {newProject && (
+        <NewProjectDialog
+          onClose={() => setNewProject(false)}
+          onCreated={() => {
+            setNewProject(false);
+            go("style");
+            refresh();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function NewProjectDialog({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [kind, setKind] = useState<ProjectKind>("mascot");
+  const [err, setErr] = useState<string | null>(null);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <form
+        className="w-full max-w-sm rounded-xl bg-white p-5 shadow-xl"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          try {
+            await post("/api/projects", { name, kind });
+            onCreated();
+          } catch (x) {
+            setErr((x as Error).message);
+          }
+        }}
+      >
+        <h3 className="text-lg font-semibold">New project</h3>
+        <p className="mt-1 text-xs text-slate-500">
+          A project is one style: a mascot, an icon set, an illustration style…
+        </p>
+        <input
+          autoFocus
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="e.g. Coco the robot"
+          className="mt-3 w-full rounded-md border border-slate-300 px-3 py-2"
+        />
+        <select
+          value={kind}
+          onChange={(e) => setKind(e.target.value as ProjectKind)}
+          className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2"
+        >
+          <option value="mascot">Mascot / character</option>
+          <option value="icon">Icon set</option>
+          <option value="illustration">Illustration style</option>
+          <option value="other">Other</option>
+        </select>
+        {err && <p className="mt-2 text-sm text-rose-700">{err}</p>}
+        <div className="mt-4 flex justify-end gap-2">
+          <Btn onClick={onClose}>Cancel</Btn>
+          <Btn kind="primary" type="submit" disabled={!name.trim()}>
+            Create
+          </Btn>
+        </div>
+      </form>
+    </div>
   );
 }

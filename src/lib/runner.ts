@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { compositeImage, keyImage, padToAspect } from "./ffmpeg";
+import { inspectImage } from "./items";
 import { getApiKey } from "./keys";
 import { slugify } from "./parse";
 import type { Provider } from "./providers/types";
@@ -7,7 +9,7 @@ import { redact } from "./redact";
 import { ProviderError, realSleep, withBackoff, type Sleep } from "./retry";
 import { sniffImage, sniffVideo, toDataUrl } from "./sniff";
 import type { Store } from "./store";
-import type { Job, RunSnapshot } from "./types";
+import type { FileInfo, Item, RunSnapshot } from "./types";
 
 export interface RunnerOptions {
   store: Store;
@@ -17,7 +19,6 @@ export interface RunnerOptions {
   backoffBaseMs?: number;
 }
 
-const MAX_IDENTITY_REFS = 3;
 const now = () => new Date().toISOString();
 
 function errMsg(e: unknown): string {
@@ -26,15 +27,16 @@ function errMsg(e: unknown): string {
 }
 
 /**
- * In-process job queue for a single-user local app.
+ * In-process queue for images and clips (single-user local app).
  *
  * Safety rules (they exist to avoid duplicate charges):
  *  - State is persisted BEFORE every paid provider call.
- *  - A submission is never retried automatically. Ambiguous outcomes become
+ *  - A paid request is never retried automatically. Ambiguous outcomes become
  *    `submission_uncertain` and wait for a human decision.
  *  - Only reads (polling, downloads) are retried, with backoff.
- *  - The provider job id is persisted the moment it is known, so polling
- *    resumes after a refresh or restart.
+ *  - A video's provider job id is persisted the moment it is known, so
+ *    polling resumes after a refresh or restart.
+ *  - A paid result is always saved, even if local post-processing fails.
  */
 export class Runner {
   private running = new Set<string>();
@@ -52,28 +54,29 @@ export class Runner {
     return this.opts.store;
   }
 
-  private patch(id: string, p: Partial<Job>): Promise<void> {
+  private patch(id: string, p: Partial<Item>): Promise<void> {
     return this.store.update((s) => {
-      const j = s.jobs.find((x) => x.id === id);
+      const j = s.items.find((x) => x.id === id);
       if (j) Object.assign(j, p);
     });
   }
 
-  /** Call once at startup: settle jobs whose in-flight call was interrupted. */
+  /** Call once at startup: settle interrupted items, resume polling. */
   async recover(): Promise<void> {
     await this.store.update((s) => {
-      for (const j of s.jobs) {
-        if (j.state === "preparing_image") {
+      for (const j of s.items) {
+        if (j.kind === "image" && j.state === "generating") {
           j.state = "submission_uncertain";
-          j.uncertainStage = "still";
+          j.uncertainStage = "image";
           j.error =
-            "The app stopped while the starting image was being generated. It may have been charged; check your OpenRouter activity.";
-        } else if (j.state === "submitting") {
+            "The app stopped while this image was being generated. It may have been charged; check your OpenRouter activity.";
+        } else if (j.kind === "clip" && j.state === "submitting") {
           j.state = "submission_uncertain";
           j.uncertainStage = "video";
           j.error =
             "The app stopped while submitting this video. It may have been accepted and charged; check your OpenRouter activity before retrying.";
         } else if (
+          j.kind === "clip" &&
           (j.state === "generating" || j.state === "downloading") &&
           !j.providerJobId
         ) {
@@ -94,11 +97,10 @@ export class Runner {
     const skipped: { id: string; reason: string }[] = [];
     await this.store.update((s) => {
       for (const { id, snapshot } of entries) {
-        const j = s.jobs.find((x) => x.id === id);
-        if (!j) skipped.push({ id, reason: "Unknown job" });
+        const j = s.items.find((x) => x.id === id);
+        if (!j) skipped.push({ id, reason: "Unknown item" });
         else if (j.state !== "draft")
           skipped.push({ id, reason: `Already ${j.state}` });
-        else if (!j.include) skipped.push({ id, reason: "Not included" });
         else {
           Object.assign(j, {
             state: "queued",
@@ -107,7 +109,7 @@ export class Runner {
             error: null,
             pollError: null,
             uncertainStage: null,
-          } satisfies Partial<Job>);
+          } satisfies Partial<Item>);
           queued.push(id);
         }
       }
@@ -116,16 +118,21 @@ export class Runner {
     return { queued, skipped };
   }
 
-  /** Explicitly re-run a failed job (the caller must have confirmed). */
+  /** Explicitly re-run a failed item (the caller must have confirmed). */
   async retry(id: string, snapshot: RunSnapshot): Promise<void> {
     await this.store.update((s) => {
-      const j = s.jobs.find((x) => x.id === id);
+      const j = s.items.find((x) => x.id === id);
       if (!j || j.state !== "failed")
-        throw new Error("Only failed jobs can be retried.");
+        throw new Error("Only failed items can be retried.");
       j.error = null;
       j.pollError = null;
       j.uncertainStage = null;
-      if (j.providerJobId && j.providerStatus === "completed" && !j.output) {
+      if (
+        j.kind === "clip" &&
+        j.providerJobId &&
+        j.providerStatus === "completed" &&
+        !j.file
+      ) {
         // Generation finished and was paid for; only the download failed.
         j.state = "downloading";
       } else {
@@ -136,9 +143,9 @@ export class Runner {
           providerJobId: null,
           pollingUrl: null,
           providerStatus: null,
-          output: null,
+          file: null,
           costUsd: null,
-        } satisfies Partial<Job>);
+        } satisfies Partial<Item>);
       }
     });
     this.tick();
@@ -147,9 +154,9 @@ export class Runner {
   /** The user checked their provider activity: nothing was started. */
   async markNotSubmitted(id: string): Promise<void> {
     await this.store.update((s) => {
-      const j = s.jobs.find((x) => x.id === id);
+      const j = s.items.find((x) => x.id === id);
       if (!j || j.state !== "submission_uncertain") {
-        throw new Error("Job is not in an uncertain state.");
+        throw new Error("Item is not in an uncertain state.");
       }
       j.state = "failed";
       j.error =
@@ -157,38 +164,11 @@ export class Runner {
     });
   }
 
-  async approveStill(id: string): Promise<void> {
-    await this.store.update((s) => {
-      const j = s.jobs.find((x) => x.id === id);
-      if (!j || j.state !== "awaiting_image_approval" || !j.still) {
-        throw new Error("No starting image is awaiting approval.");
-      }
-      j.still.approved = true;
-      j.state = "queued";
-    });
-    this.tick();
-  }
-
-  async discardStill(id: string): Promise<void> {
-    const file = await this.store.update((s) => {
-      const j = s.jobs.find((x) => x.id === id);
-      if (!j || j.state !== "awaiting_image_approval" || !j.still) {
-        throw new Error("No starting image is awaiting approval.");
-      }
-      const f = j.still.file;
-      j.still = null;
-      j.run = null;
-      j.state = "draft";
-      return f;
-    });
-    fs.rmSync(path.join(this.store.stillsDir, file), { force: true });
-  }
-
-  /** Stop queued jobs. Submitted jobs cannot be cancelled with this provider. */
+  /** Stop queued items. Submitted requests cannot be cancelled. */
   async stopQueued(): Promise<number> {
     return this.store.update((s) => {
       let n = 0;
-      for (const j of s.jobs) {
+      for (const j of s.items) {
         if (j.state === "queued") {
           j.state = "draft";
           j.run = null;
@@ -203,9 +183,10 @@ export class Runner {
 
   tick(): void {
     const s = this.store.get();
-    // Resume watching jobs that are already at the provider (always allowed).
-    for (const j of s.jobs) {
+    // Resume watching videos that are already at the provider (always allowed).
+    for (const j of s.items) {
       if (
+        j.kind === "clip" &&
         (j.state === "generating" || j.state === "downloading") &&
         j.providerJobId &&
         !this.running.has(j.id)
@@ -213,7 +194,7 @@ export class Runner {
         this.launch(j.id);
       }
     }
-    const queued = s.jobs
+    const queued = s.items
       .filter((j) => j.state === "queued" && !this.running.has(j.id))
       .sort((a, b) => a.order - b.order);
     for (const j of queued) {
@@ -242,21 +223,20 @@ export class Runner {
   }
 
   private async settleUnexpected(id: string, e: unknown): Promise<void> {
-    const j = this.store.job(id);
+    const j = this.store.item(id);
     if (!j) return;
     const m = errMsg(e);
-    if (j.state === "submitting" || j.state === "preparing_image") {
-      await this.uncertain(id, j.state === "submitting" ? "video" : "still", m);
-    } else {
-      await this.patch(id, { state: "failed", error: m });
-    }
+    if (j.state === "submitting") await this.uncertain(id, "video", m);
+    else if (j.kind === "image" && j.state === "generating")
+      await this.uncertain(id, "image", m);
+    else await this.patch(id, { state: "failed", error: m });
   }
 
   private fail(id: string, message: string) {
     return this.patch(id, { state: "failed", error: message });
   }
 
-  private uncertain(id: string, stage: "still" | "video", message: string) {
+  private uncertain(id: string, stage: "image" | "video", message: string) {
     return this.patch(id, {
       state: "submission_uncertain",
       uncertainStage: stage,
@@ -267,141 +247,179 @@ export class Runner {
   // ---- the work ----
 
   private async run(id: string): Promise<void> {
-    let job = this.store.job(id);
-    if (!job) return;
+    let item = this.store.item(id);
+    if (!item) return;
+    if (item.kind === "image") {
+      if (item.state === "queued") await this.runImage(id);
+      return;
+    }
 
-    if (job.state === "queued") {
-      const snap = job.run;
+    if (item.state === "queued") {
+      const snap = item.run;
       if (!snap) return void (await this.fail(id, "Missing run settings."));
       const provider = this.opts.providerById(snap.provider);
-
-      if (job.mode === "prepare" && !job.still) {
-        const advanced = await this.stageStill(id, provider, snap);
-        if (!advanced) return;
-      }
-      if (!(await this.stageVideo(id, provider, snap))) return;
-      job = this.store.job(id)!;
+      if (!(await this.submitClip(id, provider, snap))) return;
+      item = this.store.item(id)!;
     }
-
-    if (job.state === "generating") {
-      const provider = this.opts.providerById(
-        job.run?.provider ?? "openrouter",
-      );
+    const provider = this.opts.providerById(item.run?.provider ?? "openrouter");
+    if (item.state === "generating") {
       if (!(await this.pollUntilDone(id, provider))) return;
-      job = this.store.job(id)!;
+      item = this.store.item(id)!;
     }
-    if (job.state === "downloading") {
-      const provider = this.opts.providerById(
-        job.run?.provider ?? "openrouter",
-      );
-      await this.download(id, provider);
-    }
+    if (item.state === "downloading") await this.download(id, provider);
   }
 
-  private startImage(
-    job: Job,
-  ): { mediaType: string; bytes: Uint8Array; name: string } | null {
-    const s = this.store.get();
-    if (job.still?.approved) {
-      const f = path.join(this.store.stillsDir, job.still.file);
-      if (!fs.existsSync(f)) return null;
-      return {
-        mediaType: job.still.mediaType,
-        bytes: new Uint8Array(fs.readFileSync(f)),
-        name: "approved prepared still",
-      };
-    }
-    const img = s.images.find(
-      (i) => i.id === (job.startImageId ?? s.settings.defaultImageId),
-    );
-    if (!img) return null;
-    const f = path.join(this.store.imagesDir, img.file);
-    if (!fs.existsSync(f)) return null;
+  private readFile(it: Item | undefined) {
+    const p = it && this.store.filePath(it);
+    if (!it || !p || !fs.existsSync(p)) return null;
     return {
-      mediaType: img.mediaType,
-      bytes: new Uint8Array(fs.readFileSync(f)),
-      name: img.name,
+      path: p,
+      mediaType: it.file!.mediaType,
+      bytes: new Uint8Array(fs.readFileSync(p)),
     };
   }
 
-  /** Returns true when the job should continue straight on to the video. */
-  private async stageStill(
-    id: string,
-    provider: Provider,
-    snap: RunSnapshot,
-  ): Promise<boolean> {
-    const job = this.store.job(id)!;
-    const s = this.store.get();
-    const base = this.startImage(job);
-    if (!base || !snap.stillModel || !snap.fullStillPrompt) {
-      await this.fail(id, "Starting image or image model is missing.");
-      return false;
-    }
-    const baseId = job.startImageId ?? s.settings.defaultImageId;
-    const refs = s.images
-      .filter((i) => i.identityRef && i.id !== baseId)
-      .slice(0, MAX_IDENTITY_REFS)
-      .flatMap((i) => {
-        const f = path.join(this.store.imagesDir, i.file);
-        return fs.existsSync(f)
-          ? [
-              {
-                mediaType: i.mediaType,
-                bytes: new Uint8Array(fs.readFileSync(f)),
-              },
-            ]
-          : [];
-      });
+  // ----- images -----
 
-    await this.patch(id, { state: "preparing_image", error: null }); // persisted first
+  private async runImage(id: string): Promise<void> {
+    const item = this.store.item(id)!;
+    const snap = item.run;
+    if (!snap) return void (await this.fail(id, "Missing run settings."));
+    const provider = this.opts.providerById(snap.provider);
+    const refs = snap.refIds.flatMap((rid) => {
+      const f = this.readFile(this.store.item(rid));
+      return f ? [{ mediaType: f.mediaType, bytes: f.bytes }] : [];
+    });
+    if (snap.refIds.length && refs.length !== snap.refIds.length) {
+      return void (await this.fail(id, "A reference image file is missing."));
+    }
+
+    await this.patch(id, {
+      state: "generating",
+      error: null,
+      submittedAt: now(),
+    }); // persisted first
+    let out;
     try {
-      const out = await provider.generateStill({
-        model: snap.stillModel,
-        prompt: snap.fullStillPrompt,
-        images: [{ mediaType: base.mediaType, bytes: base.bytes }, ...refs],
+      out = await provider.generateImage({
+        model: snap.model,
+        prompt: snap.fullPrompt,
+        images: refs,
         aspectRatio: snap.aspectRatio,
+        background: snap.background === "native-alpha" ? "transparent" : null,
       });
-      const type = sniffImage(out.bytes);
-      if (!type)
-        throw new ProviderError(
-          "Provider returned an unsupported image.",
-          "rejected",
-        );
-      const file = `${id}-${Date.now()}.${type.ext}`;
-      fs.writeFileSync(path.join(this.store.stillsDir, file), out.bytes);
-      const auto = this.store.get().settings.autoApproveStills;
-      await this.patch(id, {
-        still: {
-          file,
-          mediaType: type.mediaType,
-          approved: auto,
-          costUsd: out.costUsd,
-          createdAt: now(),
-        },
-        state: auto ? "queued" : "awaiting_image_approval",
-      });
-      return auto;
     } catch (e) {
-      if (e instanceof ProviderError && e.kind === "rejected") {
+      if (e instanceof ProviderError && e.kind === "rejected")
         await this.fail(id, errMsg(e));
-      } else {
-        await this.uncertain(id, "still", errMsg(e));
+      else await this.uncertain(id, "image", errMsg(e));
+      return;
+    }
+
+    // From here on the image is paid for: always keep it.
+    const type = sniffImage(out.bytes);
+    if (!type) {
+      return void (await this.fail(
+        id,
+        "The provider returned an unsupported image (kept nothing).",
+      ));
+    }
+    let bytes = out.bytes;
+    let ext: string = type.ext;
+    let mediaType: string = type.mediaType;
+    let note: string | null = null;
+    const base = `${id}-${Date.now()}`;
+    if (snap.background === "chroma") {
+      const rawPath = path.join(
+        this.store.imagesDir,
+        `${base}.raw.${type.ext}`,
+      );
+      const keyedPath = path.join(this.store.imagesDir, `${base}.png`);
+      fs.writeFileSync(rawPath, bytes);
+      try {
+        await keyImage(rawPath, keyedPath, { keyColor: snap.keyColor });
+        bytes = new Uint8Array(fs.readFileSync(keyedPath));
+        ext = "png";
+        mediaType = "image/png";
+        fs.rmSync(rawPath, { force: true });
+      } catch (e) {
+        note = `Saved the original, but removing the green background failed: ${errMsg(e)}`;
+        fs.renameSync(
+          rawPath,
+          path.join(this.store.imagesDir, `${base}.${type.ext}`),
+        );
       }
-      return false;
+    }
+    const fileName = `${base}.${ext}`;
+    const full = path.join(this.store.imagesDir, fileName);
+    if (!fs.existsSync(full)) fs.writeFileSync(full, bytes);
+    const info = inspectImage(bytes);
+    if (snap.background === "native-alpha" && !info.hasAlpha) {
+      note =
+        "The model returned an opaque image although transparency was requested.";
+    }
+    const file: FileInfo = {
+      file: fileName,
+      mediaType,
+      bytes: bytes.length,
+      format: ext,
+      contentType: null,
+      ...info,
+    };
+    await this.patch(id, {
+      file,
+      state: "completed",
+      verdict: "pending",
+      costUsd: out.costUsd,
+      completedAt: now(),
+      error: note,
+    });
+  }
+
+  // ----- clips -----
+
+  /** Build the first frame: the green-screen plate, padded to the aspect. */
+  private async startFrame(item: Item, snap: RunSnapshot) {
+    const src = this.store.item(item.sourceId ?? "");
+    const target =
+      snap.startFrame === "plate" ? this.store.item(src?.plateId ?? "") : src;
+    const f = this.readFile(target);
+    if (!f || !target) throw new Error("The starting image file is missing.");
+    const tmp = path.join(this.store.exportsDir, `${item.id}-start.png`);
+    try {
+      if (snap.aspectRatio) {
+        await padToAspect(f.path, tmp, snap.aspectRatio, snap.keyColor);
+        return {
+          mediaType: "image/png",
+          bytes: new Uint8Array(fs.readFileSync(tmp)),
+        };
+      }
+      if (snap.startFrame === "image" && target.file!.hasAlpha) {
+        await compositeImage(f.path, tmp, "#ffffff");
+        return {
+          mediaType: "image/png",
+          bytes: new Uint8Array(fs.readFileSync(tmp)),
+        };
+      }
+      return { mediaType: f.mediaType, bytes: f.bytes };
+    } finally {
+      fs.rmSync(tmp, { force: true });
     }
   }
 
-  private async stageVideo(
+  private async submitClip(
     id: string,
     provider: Provider,
     snap: RunSnapshot,
   ): Promise<boolean> {
-    const job = this.store.job(id)!;
-    const img = this.startImage(job);
-    if (!img) {
-      await this.fail(id, "The starting image is missing.");
+    const item = this.store.item(id)!;
+    let frame;
+    try {
+      frame = await this.startFrame(item, snap); // before any paid call
+    } catch (e) {
+      await this.fail(id, errMsg(e));
       return false;
     }
+    const url = toDataUrl(frame.mediaType, frame.bytes);
     // Persist BEFORE the paid call, so a crash leaves a visible "submitting".
     await this.patch(id, {
       state: "submitting",
@@ -410,9 +428,10 @@ export class Runner {
     });
     try {
       const handle = await provider.submitVideo({
-        model: snap.videoModel,
-        prompt: snap.fullVideoPrompt,
-        firstFrameDataUrl: toDataUrl(img.mediaType, img.bytes),
+        model: snap.model,
+        prompt: snap.fullPrompt,
+        firstFrameDataUrl: url,
+        lastFrameDataUrl: snap.loopMode === "last-frame" ? url : null,
         duration: snap.duration,
         resolution: snap.resolution,
         aspectRatio: snap.aspectRatio,
@@ -427,11 +446,9 @@ export class Runner {
       });
       return true;
     } catch (e) {
-      if (e instanceof ProviderError && e.kind === "rejected") {
+      if (e instanceof ProviderError && e.kind === "rejected")
         await this.fail(id, errMsg(e));
-      } else {
-        await this.uncertain(id, "video", errMsg(e));
-      }
+      else await this.uncertain(id, "video", errMsg(e));
       return false;
     }
   }
@@ -442,7 +459,7 @@ export class Runner {
   ): Promise<boolean> {
     let consecutiveErrors = 0;
     for (;;) {
-      const job = this.store.job(id);
+      const job = this.store.item(id);
       if (!job || !job.providerJobId) return false;
       const handle = {
         id: job.providerJobId,
@@ -496,7 +513,7 @@ export class Runner {
   }
 
   private async download(id: string, provider: Provider): Promise<void> {
-    const job = this.store.job(id)!;
+    const job = this.store.item(id)!;
     const handle = { id: job.providerJobId!, pollingUrl: job.pollingUrl ?? "" };
     try {
       const { bytes, contentType } = await withBackoff(
@@ -512,18 +529,31 @@ export class Runner {
       const tmp = path.join(this.store.outputsDir, `${id}.tmp`);
       fs.writeFileSync(tmp, bytes);
       await this.store.update((s) => {
-        const j = s.jobs.find((x) => x.id === id)!;
-        const slug = slugify(j.name);
-        const re = new RegExp(`^${slug}-(\\d+)\\.`);
+        const j = s.items.find((x) => x.id === id)!;
+        const src = s.items.find((x) => x.id === j.sourceId);
+        const slug = `${slugify(src?.name ?? "clip")}-${slugify(j.name)}`;
+        const re = new RegExp(
+          `^${slug.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-(\\d+)\\.`,
+        );
         let n = 0;
-        for (const o of s.jobs) {
-          const m = o.output && re.exec(o.output.file);
+        for (const o of s.items) {
+          const m = o.kind === "clip" && o.file && re.exec(o.file.file);
           if (m) n = Math.max(n, Number(m[1]));
         }
         const file = `${slug}-${String(n + 1).padStart(2, "0")}.${ext}`;
         fs.renameSync(tmp, path.join(this.store.outputsDir, file));
-        j.output = { file, bytes: bytes.length, format, contentType };
+        j.file = {
+          file,
+          mediaType: contentType ?? "video/mp4",
+          bytes: bytes.length,
+          format,
+          width: null,
+          height: null,
+          hasAlpha: false,
+          contentType,
+        };
         j.state = "completed";
+        j.verdict = "pending";
         j.completedAt = now();
         j.error =
           format === "unknown"

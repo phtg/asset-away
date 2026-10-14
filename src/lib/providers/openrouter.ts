@@ -6,10 +6,10 @@ import type { ChatModel, ImageModel, VideoModel } from "../types";
 import type {
   ChatRequest,
   JobHandle,
+  ImageRequest,
   PollResult,
   Provider,
   RemoteStatus,
-  StillRequest,
   VideoSubmitRequest,
 } from "./types";
 
@@ -176,12 +176,17 @@ export async function listImageModels(): Promise<ImageModel[]> {
     };
     return (j.data ?? []).map((m): ImageModel => {
       const arch = (m.architecture ?? {}) as Rec;
+      const sp = (m.supported_parameters ?? {}) as Record<string, Rec>;
+      const bgValues = arr<string>(sp.background?.values) ?? [];
+      const refMax = Number((sp.input_references as Rec | undefined)?.max);
       return {
         id: String(m.id),
         name: String(m.name ?? m.id),
         acceptsImageInput: !!arr<string>(arch.input_modalities)?.includes(
           "image",
         ),
+        transparent: bgValues.includes("transparent"),
+        maxReferences: Number.isFinite(refMax) ? refMax : 0,
       };
     });
   });
@@ -226,6 +231,13 @@ export async function submitVideo(req: VideoSubmitRequest): Promise<JobHandle> {
   if (req.aspectRatio) body.aspect_ratio = req.aspectRatio;
   if (req.seed != null) body.seed = req.seed;
   if (req.generateAudio != null) body.generate_audio = req.generateAudio;
+  if (req.lastFrameDataUrl) {
+    (body.frame_images as Rec[]).push({
+      type: "image_url",
+      image_url: { url: req.lastFrameDataUrl },
+      frame_type: "last_frame",
+    });
+  }
 
   const j = (await postPaid(`${BASE}/videos`, body, 90_000)) as Rec;
   if (typeof j.id !== "string" || !j.id) {
@@ -302,17 +314,23 @@ export async function downloadVideo(
 
 // ---- stills (image-to-image) ----
 
-export async function generateStill(req: StillRequest) {
+export async function generateImage(req: ImageRequest) {
   const body: Rec = {
     model: req.model,
     prompt: req.prompt,
     n: 1,
-    input_references: req.images.map((img) => ({
+  };
+  if (req.images.length) {
+    body.input_references = req.images.map((img) => ({
       type: "image_url",
       image_url: { url: toDataUrl(img.mediaType, img.bytes) },
-    })),
-  };
+    }));
+  }
   if (req.aspectRatio) body.aspect_ratio = req.aspectRatio;
+  if (req.background === "transparent") {
+    body.background = "transparent";
+    body.output_format = "png";
+  }
   const j = (await postPaid(`${BASE}/images`, body, 240_000)) as {
     data?: { b64_json?: string; media_type?: string }[];
     usage?: { cost?: number };
@@ -364,6 +382,6 @@ export const openrouter: Provider = {
   submitVideo,
   pollVideo,
   downloadVideo,
-  generateStill,
+  generateImage,
   chat,
 };

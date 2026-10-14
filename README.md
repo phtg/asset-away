@@ -1,166 +1,157 @@
 # Asset Away
 
-A quick-and-dirty, single-user, local web app for batch-generating short
-character animations (image → video) for PowerPoint. Paste many prompts, pick a
-starting image for each, review the cost, generate in a batch, download MP4s +
-a manifest as a ZIP.
+A local, single-user workspace for producing a consistent set of presentation
+assets: **a style → a batch of images → animations of those images → export**
+(PNG, MP4, transparent GIF/WebM, on any exact background colour).
 
-Next.js + TypeScript + Tailwind. Local filesystem storage. No auth, billing,
-database or cloud infrastructure.
+Built for things like a mascot in many poses, but it works for icon sets and
+illustration styles too. Everything runs on your machine; only provider calls
+leave it. Next.js + TypeScript + Tailwind, JSON + files on disk, no database.
 
 ## Quick start
 
 ```bash
 npm install
+brew install ffmpeg          # needed for background colours, GIF, WebM
 cp .env.example .env.local   # then put your OpenRouter key in it
 npm run dev                  # http://localhost:3000
 ```
 
-No key yet? Tick **Mock mode** in the Provider panel (or start with
-`MOCK_MODE=1 npm run dev`) to try the whole workflow for free.
+No key yet? Open **Settings** and tick **Mock mode** (or start with
+`MOCK_MODE=1 npm run dev`) to try the whole flow for free.
 
 > An OpenRouter **API key is separate from any chat subscription** (Claude,
-> ChatGPT, …). Create one at <https://openrouter.ai/keys> and add credits.
-> Only one key is needed.
+> ChatGPT…). Create one at <https://openrouter.ai/keys> and add credits. That one
+> key runs everything: images, videos and the prompt helpers. (fal.ai is not
+> used: OpenRouter has a documented image-to-video API.)
 
-## What I verified before building (official OpenRouter docs, Oct 2026)
+## The flow
 
-| Question                                | Answer                                                                                                                                                                                                         |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Does OpenRouter do image-to-video?      | **Yes.** Async API: `POST /api/v1/videos` → poll `GET /api/v1/videos/{id}` → download `GET /api/v1/videos/{id}/content`. Not chat-completions. **No fal.ai needed.**                                           |
-| How is the starting image sent?         | `frame_images: [{type:"image_url", image_url:{url}, frame_type:"first_frame"}]`. URL can be public HTTPS or a data URL (per OpenRouter's official `openrouter-video` skill). This app sends a base64 data URL. |
-| Multiple identity references for video? | `input_references` exists, but if `frame_images` is present the request is image-to-video and references are ignored. So video gets **one** starting frame.                                                    |
-| Which models/settings/prices?           | Live from `GET /api/v1/videos/models` (durations, resolutions, aspect ratios, `supported_frame_images`, seed, audio, `pricing_skus`). Nothing is hard-coded.                                                   |
-| Idempotency keys?                       | **None documented** for video submission.                                                                                                                                                                      |
-| Cancelling a submitted video job?       | **No cancel call documented.**                                                                                                                                                                                 |
-| Still images (image → image)?           | `POST /api/v1/images` with base64 `input_references` (several allowed; the number varies by provider).                                                                                                         |
-| Output                                  | Content endpoint needs your API key in the `Authorization` header; completed jobs report `usage.cost`. The app saves the file immediately and reports the real container (never just renames).                 |
+The top bar has a **project** switcher (one project = one style, e.g. “Coco
+mascot”) and four tabs. Old batches stay out of the way; find anything later in
+the Library.
 
-Sources: OpenRouter docs — Video Generation guide, "Turn an Image into a Video"
-cookbook, Submit-a-video-generation-request API reference, Image Generation
-guide, and the `openrouter-video` skill.
+1. **Style** – describe the asset and its style, set style rules and motion
+   rules, upload reference images and pick the ★ **style anchor** (sent with
+   every image request so new images match). No reference yet? Create concept
+   cards from your description.
+2. **Images** – _Suggest poses_ (a vision model proposes N poses from your
+   anchor), _Paste prompts_ (`name`, prompt, `---` between blocks), or add cards
+   by hand. Prompts are **editable draft cards**: review them, then _Generate
+   selected_ (a confirmation shows models and cost). Results land in a batch
+   (newest open, older collapsed). **Review** every result: Keep ✓, Reject ✗ or
+   Regenerate ↻, one by one or in the full-screen viewer (←/→, **K** keep, **X**
+   reject, side-by-side with the anchor, any background colour). Nothing moves
+   on until you keep it.
+3. **Animations** – pick a kept image, **Prepare green screen** (see below),
+   then _Suggest animations_: for each idea the helper also recommends a
+   **duration, aspect ratio and loop / no-loop** that fit the motion (a wave is a
+   short square loop; a walk is longer, landscape, no loop; a peek plays once).
+   They show as ✨ “Auto” values you can override. Generate, review, keep.
+4. **Library & Export** – every kept (or to-review/rejected) image and clip,
+   filterable by type, status, batch, source image and text. Tick items, pick a
+   **background** (transparent or any colour; save your brand colours like
+   `#e60167`), pick formats, **Download ZIP** (with `manifest.json`).
 
-Things I could **not** verify without spending money: that every video model
-accepts data-URL frames in practice (the docs and official skill say yes). If a
-model rejects one, you get a clear failure on that job and nothing is charged
-for a definitive 4xx rejection.
+## Backgrounds, transparency and loops (what is real)
 
-## Workflow
+- **Images** can be requested with a real alpha channel on models that support
+  it (OpenAI gpt-image family, Sourceful Riverflow; the model picker labels
+  them). Other models draw on flat green and the green is **keyed out locally**.
+  If a “transparent” model returns an opaque image the card shows a warning.
+- **Video models cannot output transparency.** So clips are made on a flat key
+  colour (green) and keyed out locally with ffmpeg. That is also how a clip gets
+  your exact brand colour: key out the green, composite onto `#e60167`.
+- The green-screen first frame is made once per image, by compositing a
+  transparent PNG onto green (free, local) or, for opaque images, one
+  image-model call that you review before use. For wide aspect ratios the plate
+  is extended with extra green margin locally (the subject is never cropped).
+- **Colour accuracy (measured):** PNG is pixel-exact. MP4 is within a few
+  levels (H.264 4:2:0 cannot be bit-exact; tagged BT.709). GIF is palette
+  quantised (±1). **GIF transparency is on/off only**, so soft edges become
+  slightly jagged; WebM has true alpha but PowerPoint can’t play WebM.
+- **Loops:** 15 of the 26 video models accept a last frame; for those a loop
+  sends the same image as first _and_ last frame (a genuine seamless loop). For
+  the others the prompt asks for a return to the start pose (best effort, flagged
+  on the card). On export, **ping-pong** can make any clip loop.
+- Keying quality depends on the model keeping the green flat. If you see green
+  fringes or holes, change **Edge tolerance** in the export panel and preview it
+  in the viewer first.
 
-1. **Provider** – key status, video model (live list, filtered to models that
-   accept a starting frame, cheapest first), optional image model for stills,
-   optional helper model, concurrency (default 2).
-2. **Reference images** – drag in PNG/JPEG/WebP (type checked by file contents,
-   size-limited). Rename, choose the default **starting frame**, flag
-   **identity references**. Starting frame = first frame of the video.
-   Identity references are used only when an image model prepares a still.
-3. **Prompts** – editable shared instructions (pre-filled, appended to every
-   job) and a bulk box: blocks separated by `---`, first line = name, rest =
-   motion prompt. Import/export the job list as JSON (`public/sample-jobs.json`
-   - `public/sample-prompts.txt` are samples; "Load sample" button).
-4. **Jobs** – per-job name, starting image override, motion prompt, optional
-   starting-image prompt, duration (nearest supported to 4 s), resolution
-   (480p if supported), optional aspect ratio and seed (only if the model
-   supports them), include checkbox, and the **complete prompt that will be
-   submitted**.
-5. **Generate selected** → confirmation (provider, model, job count, estimated
-   cost or **"Cost unavailable"**) → queue.
+## What was verified against OpenRouter’s docs
 
-### Generation modes
-
-- **A. Animate existing image** (default, cheapest): starting image + prompt go
-  straight to the video model.
-- **B. Suggest animations** (optional, paid helper): sends your default
-  reference image to a vision chat model and returns prompt blocks into the bulk
-  box for you to edit. Nothing is added until you parse it.
-- **C. Prepare starting image, then animate**: an image model makes an
-  action-specific still (add a mug, change pose, add headroom). The job stops at
-  **Awaiting image approval**; you approve (or discard) before any video is paid
-  for. Auto-chaining exists only behind an off-by-default checkbox.
-
-Optional helper buttons (explicit clicks, never automatic): refine a motion
-prompt for subtle ~5 s motion; suggest a starting-image prompt from the
-reference. Suggestions are shown and only applied if you click **Use this**.
+| Capability                    | Result                                                                                                                      |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Image → video                 | `POST /api/v1/videos`, poll `GET /api/v1/videos/{id}`, download `…/content`. First/last frame via `frame_images`.           |
+| Models, prices, capabilities  | Live from `GET /api/v1/videos/models` and `/api/v1/images/models` (transparency, reference count, durations, ratios, SKUs). |
+| Image generation + references | `POST /api/v1/images` with base64 `input_references` and `background: "transparent"` where supported.                       |
+| Idempotency keys              | **None documented** for video or images.                                                                                    |
+| Cancelling a submitted job    | **No cancel call documented.**                                                                                              |
 
 ## Safety behaviour (avoiding double charges)
 
-- State is saved to `data/state.json` **before** every paid call. The provider
-  job ID is saved the instant it's known; polling resumes after refresh/restart.
-- A submission is **never retried automatically**. A definite 4xx = `failed`
-  (nothing started). A timeout / network drop / 5xx / unreadable reply, or a
-  crash mid-submit = **Submission uncertain**: you must check your OpenRouter
-  activity, then click "I checked — it was not submitted" before a retry is even
-  possible.
-- Polling and downloads retry with exponential backoff (honouring `Retry-After`).
-  A failed download can be retried for free; the video stays at the provider.
-- Double-clicks/refreshes can't queue a job twice (state checked atomically on
-  the server). Retries need explicit confirmation.
-- **Stop queued** returns waiting jobs to draft. Jobs already submitted can't be
-  cancelled (OpenRouter documents no cancel call): they keep running and
-  billing. The UI says so wherever it matters.
-- Queued jobs survive a restart and resume (you confirmed them already).
-- Keys: env var or a session-only key held in server memory. Never in URLs,
-  logs, browser storage, or saved files; error text is redacted. The key is only
-  ever sent to `openrouter.ai`.
-- Uploaded images and prompts are treated as data; helper calls put instructions
-  only in the system message.
+- State is saved to `data/state.json` **before** every paid call. A video’s
+  provider job id is saved the instant it is known; polling resumes after a
+  refresh or restart.
+- A paid request is **never retried automatically**. A definite 4xx = failed
+  (nothing started). A timeout / dropped connection / 5xx / crash mid-request =
+  **Submission uncertain**: check your OpenRouter activity, then confirm before a
+  retry is even possible.
+- Polling and downloads retry with backoff. A paid image/video is **always
+  saved**, even if local post-processing (keying) fails. A failed download can be
+  retried for free.
+- Double-clicks and refreshes cannot queue an item twice. Retries need
+  confirmation. **Stop queued** returns waiting items to draft; submitted
+  requests can’t be cancelled and keep billing (the UI says so).
+- Keys: env var or a session-only key in server memory. Never in URLs, logs,
+  browser storage or saved files; errors are redacted; the key is only sent to
+  `openrouter.ai`. Prompts and images are treated as data in helper calls.
 
-## Results
+## Files
 
-Videos are saved to `data/outputs/` as `name-01.mp4` immediately after
-generation. Each card shows an inline preview, actual format/size/content type,
-reported cost, and a download button. **Download all (ZIP)** includes a
-`manifest.json` (prompts, shared instructions, model, provider, settings, image
-names, filenames, timestamps, provider job IDs, costs). Non-MP4 output is
-reported as such and is not renamed.
+Everything is under `data/` (git-ignored): `state.json` (projects, batches,
+items), `images/`, `outputs/` (raw clips), `exports/` (cached renders).
+Delete `exports/` any time to reclaim space.
+
+**Upgrading from the first version:** on first start, the old `state.json` is
+backed up to `state.json.v1.bak` and your images and finished videos are carried
+into a project called “Imported” (drafts and failed jobs are not). Imported
+clips weren’t made on a green screen, so they download as-is but can’t be
+recoloured.
 
 ## Mock mode
 
-Clearly labelled in the UI and the confirmation dialog; makes no network calls
-and costs nothing. Put these in a prompt to simulate behaviour: `[mock:reject]`
-(refused), `[mock:uncertain]` (no response), `[mock:fail]` (fails while
-generating). The "result" is a placeholder test pattern, not your character.
-`MOCK_DELAY_MS` controls how long fake jobs take.
+Clearly labelled in the UI and dialogs; no network, no cost. Placeholder art
+(a green-screen clip and transparent images) so the whole pipeline, including
+keying and export, can be tried. Put `[mock:reject]`, `[mock:uncertain]` or
+`[mock:fail]` in a prompt to simulate failures.
 
 ## Tests
 
 ```bash
-npm test            # prompt parsing, JSON import, settings/cost estimates,
-                    # queue concurrency, persistence/resume, uncertain
-                    # submissions, retries, still approval
+npm test            # 72 tests: queue concurrency, persistence/resume, uncertain
+                    # submissions, retries, planner, v1 migration, helper
+                    # parsing, and a real-ffmpeg pipeline (keying, exact brand
+                    # colour compositing, transparent GIF/WebM alpha)
 npm run typecheck
 npm run format      # Prettier, print width 80
 ```
 
-Tests use a fake provider and a temp directory; they never touch the network.
-
-## Limitations / not supported
-
-- **Cancelling** submitted jobs and **idempotency keys**: not offered by
-  OpenRouter's video API, so not simulated.
-- Cost estimates only cover simple per-second pricing; token-priced models show
-  "Cost unavailable". Starting-image costs are shown only after generation.
-- Video accepts one starting frame; identity references reach only the image
-  model. No last-frame/end-pose control in the UI (some models support it).
-- No transparent backgrounds and no seamless-loop guarantee; PowerPoint wants
-  MP4 (H.264) — check the format badge on each result.
-- Audio is requested off for models that can generate it.
-- Single user, single process. Don't expose it to a network: there's no auth.
-- Large images are base64-encoded into the request; keep references modest
-  (default upload limit 10 MB, `MAX_UPLOAD_MB`).
-- `next build` prints a file-tracing warning for the upload route; harmless for
-  local use.
-
 ## Config (`.env.local`)
 
-See `.env.example`: `OPENROUTER_API_KEY`, `MOCK_MODE`, `MAX_UPLOAD_MB`,
-`POLL_INTERVAL_MS` (default 15000), `DATA_DIR` (default `./data`),
-`ALLOWED_DEV_ORIGINS`.
+`OPENROUTER_API_KEY`, `MOCK_MODE`, `MAX_UPLOAD_MB`, `POLL_INTERVAL_MS` (default
+15000), `DATA_DIR` (default `./data`), `ALLOWED_DEV_ORIGINS`. The dev server
+allows `localhost` and `192.168.*.*`. **There is no login**: don’t expose the
+port on a network you don’t trust.
 
-### Opening it from another device
+## Limitations
 
-The dev server allows `localhost` and `192.168.*.*` by default, so
-`http://<your-pc-ip>:3000` works from a phone/laptop on your home network (start
-with `npm run dev -- -H 0.0.0.0` if it isn't reachable). Other hosts: set
-`ALLOWED_DEV_ORIGINS`. **There is no login**: anyone who can reach the port can
-use your API key and credits, so only do this on a network you trust.
+- OpenRouter has no cancel/idempotency for video; costs for images are only
+  known after generation; token-priced video models show “Cost unavailable”.
+- Video takes one starting image (no multi-reference); identity is carried by
+  the green-screen first frame.
+- AI backgrounds are never exactly your colour; exact colours come from the
+  local compositing step.
+- Single user, single process; no auth.
+- `next build` prints a file-tracing warning for the upload route; harmless
+  locally.

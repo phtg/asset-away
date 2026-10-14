@@ -5,6 +5,8 @@ export interface VideoSubmitRequest {
   prompt: string;
   /** The video's starting frame, as a data URL. */
   firstFrameDataUrl: string;
+  /** Optional last frame (same image => a seamless loop). */
+  lastFrameDataUrl?: string | null;
   duration: number | null;
   resolution: string | null;
   aspectRatio: string | null;
@@ -26,12 +28,14 @@ export interface PollResult {
   costUsd?: number | null;
 }
 
-export interface StillRequest {
+export interface ImageRequest {
   model: string;
   prompt: string;
-  /** First = the job's starting image; the rest = identity references. */
+  /** Reference images (style anchor first). May be empty. */
   images: { mediaType: string; bytes: Uint8Array }[];
   aspectRatio: string | null;
+  /** Ask the model for a real alpha channel (only if it supports it). */
+  background?: "transparent" | null;
 }
 
 export interface ChatRequest {
@@ -54,8 +58,8 @@ export interface Provider {
   downloadVideo(
     h: JobHandle,
   ): Promise<{ bytes: Uint8Array; contentType: string | null }>;
-  generateStill(
-    req: StillRequest,
+  generateImage(
+    req: ImageRequest,
   ): Promise<{ bytes: Uint8Array; mediaType: string; costUsd: number | null }>;
   chat(req: ChatRequest): Promise<string>;
 }

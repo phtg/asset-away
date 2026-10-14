@@ -55,7 +55,22 @@ export const mock: Provider = {
     return VIDEO_MODELS;
   },
   async listImageModels(): Promise<ImageModel[]> {
-    return [{ id: "mock/still", name: "Mock still", acceptsImageInput: true }];
+    return [
+      {
+        id: "mock/image-alpha",
+        name: "Mock image (transparent)",
+        acceptsImageInput: true,
+        transparent: true,
+        maxReferences: 4,
+      },
+      {
+        id: "mock/image-opaque",
+        name: "Mock image (no alpha)",
+        acceptsImageInput: true,
+        transparent: false,
+        maxReferences: 4,
+      },
+    ];
   },
   async listChatModels(): Promise<ChatModel[]> {
     return [{ id: "mock/helper", name: "Mock helper", promptPrice: 0 }];
@@ -91,7 +106,7 @@ export const mock: Provider = {
     );
     return { bytes: new Uint8Array(bytes), contentType: "video/mp4" };
   },
-  async generateStill(req) {
+  async generateImage(req) {
     await realSleep(500);
     if (req.prompt.includes("[mock:reject]")) {
       throw new ProviderError("400: Mock rejection.", "rejected", 400);
@@ -99,20 +114,68 @@ export const mock: Provider = {
     if (req.prompt.includes("[mock:uncertain]")) {
       throw new ProviderError("No response (mock timeout).", "uncertain");
     }
-    // The "generated" still is just the starting image again.
-    const first = req.images[0];
-    return { bytes: first.bytes, mediaType: first.mediaType, costUsd: 0 };
+    // Placeholder art: a green-screen plate when asked for chroma green,
+    // otherwise a transparent PNG. Never the user's real character.
+    const green = /chroma green/i.test(req.prompt);
+    const file = path.join(
+      process.cwd(),
+      "assets",
+      green ? "mock-plate.png" : "mock-image.png",
+    );
+    return {
+      bytes: new Uint8Array(fs.readFileSync(file)),
+      mediaType: "image/png",
+      costUsd: 0,
+    };
   },
   async chat(req) {
     await realSleep(300);
-    if (req.system.includes("ANIMATION_IDEAS")) {
-      return [
-        "Thinking",
-        "The robot tilts its head, pauses, then returns to its starting pose.",
-        "---",
-        "Hello wave",
-        "The robot gently waves its raised hand twice, then returns to its starting pose.",
-      ].join("\n");
+    if (req.system.includes("POSES_JSON")) {
+      return JSON.stringify([
+        {
+          name: "Pointing",
+          prompt:
+            "The character points to the side with one arm, other arm relaxed.",
+        },
+        {
+          name: "Thinking",
+          prompt:
+            "The character rests a hand on its chin, head slightly tilted.",
+        },
+        {
+          name: "Celebrating",
+          prompt: "The character raises both arms in a small celebration.",
+        },
+      ]);
+    }
+    if (req.system.includes("ANIMATIONS_JSON")) {
+      return JSON.stringify([
+        {
+          name: "Hello wave",
+          prompt: "The raised hand waves gently twice, then settles.",
+          duration: 3,
+          aspectRatio: "1:1",
+          loop: true,
+          reason: "short gesture: tight square loop",
+        },
+        {
+          name: "Walk across",
+          prompt: "The character walks steadily from left to right.",
+          duration: 6,
+          aspectRatio: "16:9",
+          loop: false,
+          reason: "travelling motion: landscape, longer, no loop",
+        },
+        {
+          name: "Peek in",
+          prompt:
+            "The character leans in from the edge of the frame and smiles.",
+          duration: 4,
+          aspectRatio: "4:3",
+          loop: false,
+          reason: "entrance: plays once",
+        },
+      ]);
     }
     return `[mock helper] ${req.user.slice(0, 200)}`;
   },

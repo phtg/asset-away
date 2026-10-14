@@ -1,20 +1,17 @@
-Thinking
-The robot tilts its head thoughtfully, pauses, then returns to its starting pose.
----
-Coffee cheers
-The robot raises its existing coffee mug toward the viewer in a friendly toast, then returns it to its starting position.
----
-Hello wave
-The robot gently waves its raised hand twice, then returns to the starting pose.
+Waving
+The character stands facing the viewer and waves with its right hand, friendly smile.
 ---
 Pointing
-The robot lifts one arm and points to the side of the frame with a small nod, then lowers its arm back to the starting pose.
+The character points to its left with one arm extended, the other arm relaxed.
 ---
-Leaning in
-The robot leans slightly toward the viewer as if listening closely, holds for a moment, then eases back upright.
+Peeking
+The character peeks out from behind a flat panel, one hand on the edge.
 ---
-Presenting
-The robot sweeps one open hand outward in a smooth presenting gesture, pauses, then returns to the starting pose.
+Thinking
+The character rests one hand on its chin, head tilted slightly, looking upward.
 ---
 Celebrating
-The robot raises both fists in a small, joyful celebration, pulses its cyan face, then returns to the starting pose.
+The character raises both arms in a small, joyful celebration.
+---
+Presenting
+The character holds one open hand out to the side as if presenting something.

@@ -3,7 +3,6 @@ import {
   cleanHelperText,
   composePrompt,
   parseBulkPrompts,
-  parseJobListJson,
   slugify,
 } from "@/lib/parse";
 
@@ -69,37 +68,6 @@ describe("composePrompt / slugify", () => {
     expect(slugify("Coffee cheers!")).toBe("coffee-cheers");
     expect(slugify("  ")).toBe("animation");
     expect(slugify("Ünïcode / path\\..")).toBe("unicode-path");
-  });
-});
-
-describe("parseJobListJson", () => {
-  it("round-trips a valid export", () => {
-    const raw = JSON.stringify({
-      jobs: [{ name: "Wave", actionPrompt: "wave", duration: 4, seed: 7 }],
-    });
-    const out = parseJobListJson(raw);
-    expect(out.jobs[0]).toMatchObject({
-      name: "Wave",
-      include: true,
-      mode: "animate",
-      duration: 4,
-      seed: 7,
-      resolution: null,
-    });
-  });
-  it("accepts a bare array and rejects junk", () => {
-    expect(parseJobListJson('[{"name":"A"}]').jobs).toHaveLength(1);
-    expect(() => parseJobListJson("nope")).toThrow(/valid JSON/);
-    expect(() => parseJobListJson('{"jobs":[{"actionPrompt":"x"}]}')).toThrow(
-      /no name/,
-    );
-    expect(() => parseJobListJson('{"x":1}')).toThrow(/jobs/);
-  });
-  it("ignores wrong-typed numbers", () => {
-    const j = parseJobListJson('[{"name":"A","duration":"4","seed":1.5}]')
-      .jobs[0];
-    expect(j.duration).toBeNull();
-    expect(j.seed).toBeNull();
   });
 });
 

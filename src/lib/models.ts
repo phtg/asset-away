@@ -1,4 +1,4 @@
-import type { Job, VideoModel } from "./types";
+import type { Item, VideoModel } from "./types";
 
 const RES_ORDER = ["360p", "480p", "720p", "768p", "1080p", "1K", "2K", "4K"];
 
@@ -27,6 +27,10 @@ export function defaultResolution(
   )[0];
 }
 
+export function supportsLastFrame(m: VideoModel): boolean {
+  return !!m.supportedFrameImages?.includes("last_frame");
+}
+
 export function supportsFirstFrame(m: VideoModel): boolean {
   return !!m.supportedFrameImages?.includes("first_frame");
 }
@@ -40,13 +44,26 @@ export interface ResolvedSettings {
 }
 
 export function resolveSettings(
-  job: Pick<Job, "duration" | "resolution" | "aspectRatio" | "seed">,
+  job: Pick<Item, "duration" | "resolution" | "aspectRatio" | "seed"> &
+    Partial<Pick<Item, "suggestion" | "loop">>,
   model: VideoModel,
 ): ResolvedSettings {
+  const sug = job.suggestion;
+  const aspectWanted = job.aspectRatio ?? sug?.aspectRatio ?? null;
   return {
-    duration: job.duration ?? nearestDuration(model.supportedDurations),
+    duration:
+      job.duration ??
+      nearestDuration(
+        model.supportedDurations,
+        sug?.duration ?? TARGET_SECONDS,
+      ),
     resolution: job.resolution ?? defaultResolution(model.supportedResolutions),
-    aspectRatio: job.aspectRatio,
+    // a suggested ratio the model cannot do is dropped, not sent
+    aspectRatio:
+      job.aspectRatio ??
+      (aspectWanted && model.supportedAspectRatios?.includes(aspectWanted)
+        ? aspectWanted
+        : null),
     // Only models that can produce audio get an explicit "no audio" request.
     seed: model.seed === true ? job.seed : null,
     generateAudio: model.generateAudio === true ? false : null,
@@ -55,7 +72,8 @@ export function resolveSettings(
 
 /** Human-readable problems with sending this job to this model. */
 export function validateSettings(
-  job: Pick<Job, "duration" | "resolution" | "aspectRatio" | "seed">,
+  job: Pick<Item, "duration" | "resolution" | "aspectRatio" | "seed"> &
+    Partial<Pick<Item, "suggestion" | "loop">>,
   model: VideoModel,
 ): string[] {
   const errs: string[] = [];

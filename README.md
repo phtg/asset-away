@@ -154,4 +154,13 @@ Tests use a fake provider and a temp directory; they never touch the network.
 ## Config (`.env.local`)
 
 See `.env.example`: `OPENROUTER_API_KEY`, `MOCK_MODE`, `MAX_UPLOAD_MB`,
-`POLL_INTERVAL_MS` (default 15000), `DATA_DIR` (default `./data`).
+`POLL_INTERVAL_MS` (default 15000), `DATA_DIR` (default `./data`),
+`ALLOWED_DEV_ORIGINS`.
+
+### Opening it from another device
+
+The dev server allows `localhost` and `192.168.*.*` by default, so
+`http://<your-pc-ip>:3000` works from a phone/laptop on your home network (start
+with `npm run dev -- -H 0.0.0.0` if it isn't reachable). Other hosts: set
+`ALLOWED_DEV_ORIGINS`. **There is no login**: anyone who can reach the port can
+use your API key and credits, so only do this on a network you trust.
